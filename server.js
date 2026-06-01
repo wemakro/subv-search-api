@@ -27,14 +27,20 @@ app.get("/search", async (req, res) => {
   try {
     const { dateFrom, dateTo, district } = req.query;
     if (!dateFrom) return res.status(400).json({ error: "dateFrom required" });
+    if (!CL_TOKEN) return res.status(401).json({ error: "No CourtListener token set." });
 
-    if (!CL_TOKEN) {
-      return res.status(401).json({ error: "No CourtListener token set. Add COURTLISTENER_TOKEN in Render environment variables." });
-    }
-
+    // CourtListener v4 dockets — nature_of_suit 430 = Chapter 11 bankruptcy
+    // No "type" param — filter by nature_of_suit and date instead
     const courtParam = district && district !== "all" ? "&court=" + district : "";
-    const toParam = dateTo ? "&date_filed__lte=" + dateTo : "";
-    const url = "https://www.courtlistener.com/api/rest/v4/dockets/?type=bk&date_filed__gte=" + dateFrom + toParam + courtParam + "&order_by=-date_filed&page_size=50&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
+    const toParam    = dateTo ? "&date_filed__lte=" + dateTo : "";
+    const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
+      + "nature_of_suit=430"
+      + "&date_filed__gte=" + dateFrom
+      + toParam
+      + courtParam
+      + "&order_by=-date_filed"
+      + "&page_size=50"
+      + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
 
     const headers = {
       "Accept": "application/json",
@@ -43,11 +49,9 @@ app.get("/search", async (req, res) => {
 
     const { status, raw } = await httpsGet(url, headers);
 
-    // Always return JSON — never crash on bad response
     let body;
-    try {
-      body = JSON.parse(raw);
-    } catch(e) {
+    try { body = JSON.parse(raw); }
+    catch(e) {
       return res.status(502).json({
         error: "CourtListener returned non-JSON (status " + status + ")",
         preview: raw.slice(0, 300)
@@ -62,12 +66,12 @@ app.get("/search", async (req, res) => {
     }
 
     const results = (body.results || []).map(d => ({
-      debtor:     d.case_name        || "",
-      caseNo:     d.docket_number    || "",
-      court:      d.court_id         || "",
-      filed:      d.date_filed       || "",
-      terminated: d.date_terminated  || "",
-      attorney:   d.assigned_to_str  || "",
+      debtor:     d.case_name       || "",
+      caseNo:     d.docket_number   || "",
+      court:      d.court_id        || "",
+      filed:      d.date_filed      || "",
+      terminated: d.date_terminated || "",
+      attorney:   d.assigned_to_str || "",
       url: d.absolute_url ? "https://www.courtlistener.com" + d.absolute_url : ""
     }));
 
