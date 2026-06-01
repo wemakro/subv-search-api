@@ -6,6 +6,22 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const CL_TOKEN = process.env.COURTLISTENER_TOKEN || "";
 
+// All 94 bankruptcy court IDs on CourtListener
+const ALL_BK_COURTS = [
+  "almb","alnb","alsb","akb","arb","areb","arwb",
+  "cacb","caeb","canb","casb","cob","ctb","deb","dcb",
+  "flmb","flnb","flsb","gamb","ganb","gasb","gub","hib","idb",
+  "ilcb","ilnb","ilsb","innb","insb","ianb","iasb","ksb",
+  "kyeb","kywb","laeb","lamb","lawb","meb","mdb","mab",
+  "mieb","miwb","mnb","msnb","mssb","moeb","mowb","mtb",
+  "nebraskab","nvb","nhb","njb","nmb","nyeb","nynb","nysb","nywb",
+  "nceb","ncmb","ncwb","ndb","ohnb","ohsb","okeb","oknb","okwb",
+  "orb","paeb","pamb","pawb","prb","rib","scb","sdb",
+  "tneb","tnmb","tnwb","txeb","txnb","txsb","txwb",
+  "utb","vtb","vaeb","vawb","waeb","wawb","wvnb","wvsb",
+  "wieb","wiwb","wyb","vib","nmib"
+];
+
 app.use(cors());
 app.use(express.json());
 
@@ -29,43 +45,53 @@ app.get("/search", async (req, res) => {
     if (!dateFrom) return res.status(400).json({ error: "dateFrom required" });
     if (!CL_TOKEN) return res.status(401).json({ error: "No CourtListener token set." });
 
-    // CourtListener v4 dockets — nature_of_suit 430 = Chapter 11 bankruptcy
-    // No "type" param — filter by nature_of_suit and date instead
-    const courtParam = district && district !== "all" ? "&court=" + district : "";
-    const toParam    = dateTo ? "&date_filed__lte=" + dateTo : "";
-    const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
-      + "nature_of_suit=430"
-      + "&date_filed__gte=" + dateFrom
-      + toParam
-      + courtParam
-      + "&order_by=-date_filed"
-      + "&page_size=50"
-      + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
-
     const headers = {
       "Accept": "application/json",
       "Authorization": "Token " + CL_TOKEN
     };
 
-    const { status, raw } = await httpsGet(url, headers);
+    const toParam = dateTo ? "&date_filed__lte=" + dateTo : "";
+    let allResults = [];
 
-    let body;
-    try { body = JSON.parse(raw); }
-    catch(e) {
-      return res.status(502).json({
-        error: "CourtListener returned non-JSON (status " + status + ")",
-        preview: raw.slice(0, 300)
+    if (district && district !== "all") {
+      // Single court search
+      const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
+        + "court=" + district
+        + "&date_filed__gte=" + dateFrom
+        + toParam
+        + "&order_by=-date_filed"
+        + "&page_size=50"
+        + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
+
+      const { status, raw } = await httpsGet(url, headers);
+      let body;
+      try { body = JSON.parse(raw); } catch(e) {
+        return res.status(502).json({ error: "CourtListener returned non-JSON", preview: raw.slice(0,200) });
+      }
+      if (status !== 200) return res.status(status).json({ error: "CourtListener error " + status, detail: JSON.stringify(body).slice(0,300) });
+      allResults = body.results || [];
+
+    } else {
+      // Search top 20 highest-volume bankruptcy courts in parallel
+      const topCourts = ["txsb","nysb","deb","flsb","canb","cacb","ilnb","ganb","njb","mdflb","paeb","vaeb","txnb","flmb","ohsb","nynb","nywb","azb","cob","nvb"];
+      const fetches = topCourts.map(court => {
+        const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
+          + "court=" + court
+          + "&date_filed__gte=" + dateFrom
+          + toParam
+          + "&order_by=-date_filed"
+          + "&page_size=10"
+          + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
+        return httpsGet(url, headers).then(({ raw }) => {
+          try { return JSON.parse(raw).results || []; } catch(e) { return []; }
+        }).catch(() => []);
       });
+
+      const nested = await Promise.all(fetches);
+      allResults = nested.flat().sort((a, b) => (b.date_filed||"").localeCompare(a.date_filed||""));
     }
 
-    if (status !== 200) {
-      return res.status(status).json({
-        error: "CourtListener error " + status,
-        detail: JSON.stringify(body).slice(0, 300)
-      });
-    }
-
-    const results = (body.results || []).map(d => ({
+    const results = allResults.map(d => ({
       debtor:     d.case_name       || "",
       caseNo:     d.docket_number   || "",
       court:      d.court_id        || "",
@@ -75,7 +101,7 @@ app.get("/search", async (req, res) => {
       url: d.absolute_url ? "https://www.courtlistener.com" + d.absolute_url : ""
     }));
 
-    res.json({ count: body.count || results.length, results });
+    res.json({ count: results.length, results });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
