@@ -6,20 +6,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const CL_TOKEN = process.env.COURTLISTENER_TOKEN || "";
 
-// All 94 bankruptcy court IDs on CourtListener
-const ALL_BK_COURTS = [
+// All 94 US bankruptcy court IDs on CourtListener
+// Used when user selects a specific district to filter results
+const COURT_IDS = [
   "almb","alnb","alsb","akb","arb","areb","arwb",
   "cacb","caeb","canb","casb","cob","ctb","deb","dcb",
   "flmb","flnb","flsb","gamb","ganb","gasb","gub","hib","idb",
   "ilcb","ilnb","ilsb","innb","insb","ianb","iasb","ksb",
   "kyeb","kywb","laeb","lamb","lawb","meb","mdb","mab",
   "mieb","miwb","mnb","msnb","mssb","moeb","mowb","mtb",
-  "nebraskab","nvb","nhb","njb","nmb","nyeb","nynb","nysb","nywb",
-  "nceb","ncmb","ncwb","ndb","ohnb","ohsb","okeb","oknb","okwb",
-  "orb","paeb","pamb","pawb","prb","rib","scb","sdb",
+  "nebraskab","nvb","nhb","njb","nmb",
+  "nyeb","nynb","nysb","nywb",
+  "nceb","ncmb","ncwb","ndb","ohnb","ohsb",
+  "okeb","oknb","okwb","orb",
+  "paeb","pamb","pawb","prb","rib","scb","sdb",
   "tneb","tnmb","tnwb","txeb","txnb","txsb","txwb",
-  "utb","vtb","vaeb","vawb","waeb","wawb","wvnb","wvsb",
-  "wieb","wiwb","wyb","vib","nmib"
+  "utb","vtb","vaeb","vawb","waeb","wawb",
+  "wvnb","wvsb","wieb","wiwb","wyb","vib","nmib"
 ];
 
 app.use(cors());
@@ -39,9 +42,10 @@ function httpsGet(url, headers) {
   });
 }
 
+// GET /search?dateFrom=2026-05-01&dateTo=2026-06-01&district=txsb&q=subchapter+v
 app.get("/search", async (req, res) => {
   try {
-    const { dateFrom, dateTo, district } = req.query;
+    const { dateFrom, dateTo, district, q } = req.query;
     if (!dateFrom) return res.status(400).json({ error: "dateFrom required" });
     if (!CL_TOKEN) return res.status(401).json({ error: "No CourtListener token set." });
 
@@ -50,58 +54,65 @@ app.get("/search", async (req, res) => {
       "Authorization": "Token " + CL_TOKEN
     };
 
-    const toParam = dateTo ? "&date_filed__lte=" + dateTo : "";
-    let allResults = [];
+    // If specific district selected, filter to that court only
+    // If "all", pass no court filter — CourtListener searches all courts
+    // but we add all bk court IDs as OR to ensure only bankruptcy courts returned
+    const courtParam = (district && district !== "all")
+      ? "&court=" + district
+      : "&court=" + COURT_IDS.join("&court=");
 
-    if (district && district !== "all") {
-      // Single court search
-      const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
-        + "court=" + district
-        + "&date_filed__gte=" + dateFrom
-        + toParam
-        + "&order_by=-date_filed"
-        + "&page_size=50"
-        + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
+    const toParam = dateTo ? "&filed_before=" + dateTo : "";
 
-      const { status, raw } = await httpsGet(url, headers);
-      let body;
-      try { body = JSON.parse(raw); } catch(e) {
-        return res.status(502).json({ error: "CourtListener returned non-JSON", preview: raw.slice(0,200) });
-      }
-      if (status !== 200) return res.status(status).json({ error: "CourtListener error " + status, detail: JSON.stringify(body).slice(0,300) });
-      allResults = body.results || [];
+    const keyword = q || "subchapter v";
+    const searchUrl = "https://www.courtlistener.com/api/rest/v4/search/?"
+      + "type=r"
+      + "&q=" + encodeURIComponent(keyword)
+      + "&filed_after=" + dateFrom
+      + toParam
+      + courtParam
+      + "&order_by=score+desc"
+      + "&page_size=50";
 
-    } else {
-      // Search top 20 highest-volume bankruptcy courts in parallel
-      const topCourts = ["txsb","nysb","deb","flsb","canb","cacb","ilnb","ganb","njb","mdflb","paeb","vaeb","txnb","flmb","ohsb","nynb","nywb","azb","cob","nvb"];
-      const fetches = topCourts.map(court => {
-        const url = "https://www.courtlistener.com/api/rest/v4/dockets/?"
-          + "court=" + court
-          + "&date_filed__gte=" + dateFrom
-          + toParam
-          + "&order_by=-date_filed"
-          + "&page_size=10"
-          + "&fields=id,case_name,docket_number,court_id,date_filed,date_terminated,assigned_to_str,absolute_url";
-        return httpsGet(url, headers).then(({ raw }) => {
-          try { return JSON.parse(raw).results || []; } catch(e) { return []; }
-        }).catch(() => []);
+    const { status, raw } = await httpsGet(searchUrl, headers);
+
+    let body;
+    try { body = JSON.parse(raw); } catch(e) {
+      return res.status(502).json({
+        error: "CourtListener returned non-JSON (status " + status + ")",
+        preview: raw.slice(0, 300)
       });
-
-      const nested = await Promise.all(fetches);
-      allResults = nested.flat().sort((a, b) => (b.date_filed||"").localeCompare(a.date_filed||""));
     }
 
-    const results = allResults.map(d => ({
-      debtor:     d.case_name       || "",
-      caseNo:     d.docket_number   || "",
-      court:      d.court_id        || "",
-      filed:      d.date_filed      || "",
-      terminated: d.date_terminated || "",
-      attorney:   d.assigned_to_str || "",
-      url: d.absolute_url ? "https://www.courtlistener.com" + d.absolute_url : ""
-    }));
+    if (status !== 200) {
+      return res.status(status).json({
+        error: "CourtListener error " + status,
+        detail: JSON.stringify(body).slice(0, 300)
+      });
+    }
 
-    res.json({ count: results.length, results });
+    // Search API returns hits with nested docket info
+    const seen = new Set();
+    const results = [];
+    for (const hit of (body.results || [])) {
+      const docketId = hit.docket_id || hit.id;
+      if (seen.has(docketId)) continue;
+      seen.add(docketId);
+      results.push({
+        debtor:   hit.caseName      || hit.case_name   || "",
+        caseNo:   hit.docketNumber  || hit.docket_number || "",
+        court:    hit.court_id      || hit.court        || "",
+        filed:    hit.dateFiled     || hit.date_filed   || "",
+        attorney: hit.assigned_to_str || "",
+        firm:     "",
+        url: hit.absolute_url
+          ? "https://www.courtlistener.com" + hit.absolute_url
+          : (hit.docket_absolute_url
+            ? "https://www.courtlistener.com" + hit.docket_absolute_url
+            : "")
+      });
+    }
+
+    res.json({ count: body.count || results.length, results });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
