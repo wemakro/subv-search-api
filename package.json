@@ -1,16 +1,18 @@
 {
   "name": "subv-search-api",
-  "version": "2.0.0",
-  "description": "CourtListener Sub-V bankruptcy case discovery API",
+  "version": "3.0.0",
+  "description": "CourtListener Sub-V bankruptcy case discovery with petition extraction",
   "main": "src/server.js",
   "engines": { "node": "18.x" },
   "scripts": {
     "start": "node src/server.js",
-    "test:cl": "node scripts/testCourtListener.js"
+    "test:cl": "node scripts/testCourtListener.js",
+    "test:petition": "node scripts/testPetitionExtraction.js"
   },
   "dependencies": {
     "express": "4.18.2",
     "cors": "2.8.5",
-    "dotenv": "16.4.5"
+    "dotenv": "16.4.5",
+    "pdf-parse": "1.1.1"
   }
 }
