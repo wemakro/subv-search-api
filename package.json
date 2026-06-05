@@ -1,1 +1,16 @@
-{"name":"subv-search-api","version":"1.0.0","main":"server.js","scripts":{"start":"node server.js"},"dependencies":{"express":"4.18.2","cors":"2.8.5"}}
+{
+  "name": "subv-search-api",
+  "version": "2.0.0",
+  "description": "CourtListener Sub-V bankruptcy case discovery API",
+  "main": "src/server.js",
+  "engines": { "node": "18.x" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test:cl": "node scripts/testCourtListener.js"
+  },
+  "dependencies": {
+    "express": "4.18.2",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5"
+  }
+}
