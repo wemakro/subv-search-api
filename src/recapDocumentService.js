@@ -15,8 +15,12 @@ async function fetchPdfBuffer(url) {
 
 async function extractPdfText(url) {
   try {
-    // Dynamic require so server doesn't crash if pdf-parse has install issues
-    const pdfParse = require("pdf-parse");
+    let pdfParse;
+    try { pdfParse = require("pdf-parse"); }
+    catch(e) {
+      logger.warn("pdf-parse not available — skipping PDF extraction");
+      return { text: "", method: "pdf_failed", warning: "pdf-parse not installed" };
+    }
     const buf = await fetchPdfBuffer(url);
     const result = await pdfParse(buf);
     return { text: result.text || "", method: "pdf_text" };
