@@ -10,7 +10,7 @@
   .app{max-width:980px;margin:0 auto;padding:16px}
   .header{margin-bottom:14px}
   .header h1{font-size:18px;font-weight:600}
-  .header .meta{font-size:12px;color:#888780;margin-top:3px;display:flex;gap:12px;flex-wrap:wrap}
+  .meta{font-size:12px;color:#888780;margin-top:3px;display:flex;gap:12px;flex-wrap:wrap}
   .hot{color:#d35400;font-weight:500}
   .tabs{display:flex;gap:5px;margin-bottom:16px;flex-wrap:wrap}
   .tab{padding:6px 14px;border-radius:8px;border:0.5px solid #d4d4d0;background:transparent;color:#888780;font-size:13px;cursor:pointer;font-family:inherit}
@@ -47,7 +47,6 @@
   .pipeline-tile .count{font-size:22px;font-weight:500;margin-top:4px}
   .summary-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:0.5px solid #e8e8e5;font-size:13px}
   .summary-row:last-child{border-bottom:none}
-  .contact-edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
   a{color:#185FA5}
   .toast{position:fixed;top:14px;right:14px;background:#1D9E75;color:#fff;padding:9px 16px;border-radius:8px;z-index:999;font-size:13px;box-shadow:0 2px 12px rgba(0,0,0,.2);display:none}
   pre{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.7}
@@ -88,11 +87,14 @@
       <div class="grid2">
         <div><label>From date</label><input type="date" id="dateFrom"/></div>
         <div><label>To date</label><input type="date" id="dateTo"/></div>
-        <div class="span2"><label>Keyword</label><input type="text" id="keyword" value="subchapter v"/>
+        <div class="span2">
+          <label>Keyword</label>
+          <input type="text" id="keyword" value="subchapter v"/>
           <div style="font-size:11px;color:#aaa;margin-top:3px">Default: "subchapter v" — also try "small business debtor" or a company/attorney name</div>
         </div>
-        <div class="span2"><label>District</label>
-          <select id="district"><option value="all">All Districts</option></select>
+        <div class="span2">
+          <label>District</label>
+          <select id="district"></select>
         </div>
       </div>
       <button class="btn btn-primary btn-full" id="searchBtn" onclick="doSearch()" style="margin-top:10px">🔍 Search Today's Filings</button>
@@ -155,17 +157,65 @@
 </div>
 
 <script>
+// ── HELPERS (defined first to avoid initialization errors) ──
+function uid()       { return Math.random().toString(36).slice(2,9); }
+function fmt$(v)     { return "$" + Number(v||0).toLocaleString(); }
+function isoToday()  { return new Date().toISOString().slice(0,10); }
+function isoYesterday() { var d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
+function isoLast7()     { var d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); }
+function daysSince(d)   { return d ? Math.floor((Date.now()-new Date(d))/86400000) : null; }
+function setToday()     { document.getElementById("dateFrom").value=isoToday(); document.getElementById("dateTo").value=isoToday(); }
+function setYesterday() { var d=isoYesterday(); document.getElementById("dateFrom").value=d; document.getElementById("dateTo").value=d; }
+function setLast7()     { document.getElementById("dateFrom").value=isoLast7(); document.getElementById("dateTo").value=isoToday(); }
+
+function urgencyLabel(filed) {
+  var d = daysSince(filed);
+  if (d===null) return null;
+  if (d<=3)  return {label:"🔥 Day "+d+" — Act now",color:"#c0392b"};
+  if (d<=10) return {label:"⚡ Day "+d+" — Hot lead",color:"#d35400"};
+  if (d<=21) return {label:"✅ Day "+d+" — In window",color:"#1D9E75"};
+  if (d<=45) return {label:"📋 Day "+d+" — Active",color:"#185FA5"};
+  return {label:"📁 Day "+d,color:"#888780"};
+}
+
+function showToast(msg) {
+  var t=document.getElementById("toast");
+  t.textContent=msg; t.style.display="block";
+  setTimeout(function(){ t.style.display="none"; },3000);
+}
+
+function showMsg(el, text, type) {
+  el.className="msg msg-"+type;
+  el.textContent=text;
+  el.style.display="block";
+}
+
+function badgeHtml(status) {
+  var colors = {
+    "New Lead":       {bg:"#E6F1FB",color:"#0C447C"},
+    "Outreach Sent":  {bg:"#FAEEDA",color:"#633806"},
+    "Responded":      {bg:"#FDE8F0",color:"#7A1535"},
+    "Demo Scheduled": {bg:"#EEEDFE",color:"#3C3489"},
+    "Demo Done":      {bg:"#E1F5EE",color:"#085041"},
+    "Proposal Sent":  {bg:"#EAF3DE",color:"#1A6608"},
+    "Closed Won":     {bg:"#EAF3DE",color:"#27500A"},
+    "Closed Lost":    {bg:"#F3F3F2",color:"#505050"},
+    "No Response":    {bg:"#F3F3F2",color:"#888780"}
+  };
+  var s = colors[status]||{bg:"#eee",color:"#333"};
+  return '<span class="badge" style="background:'+s.bg+';color:'+s.color+'">'+status+'</span>';
+}
+
 // ── STATE ──
-let contacts = JSON.parse(localStorage.getItem("bi-crm-contacts") || "[]");
-let yourName  = localStorage.getItem("bi-name")  || "";
-let yourPhone = localStorage.getItem("bi-phone") || "";
-let lastRun   = localStorage.getItem("bi-lastrun") || "";
-let outreachContact = null;
-let currentTmpl = "attorney_email";
+var contacts   = JSON.parse(localStorage.getItem("bi-crm-contacts")||"[]");
+var yourName   = localStorage.getItem("bi-name")||"";
+var yourPhone  = localStorage.getItem("bi-phone")||"";
+var lastRun    = localStorage.getItem("bi-lastrun")||"";
+var outreachContact = null;
+var currentTmpl = "attorney_email";
+var _searchResults = [];
 
-const BACKEND = ""; // Same origin — no domain needed
-
-const STATUS_COLORS = {
+var STATUS_COLORS = {
   "New Lead":       {bg:"#E6F1FB",color:"#0C447C"},
   "Outreach Sent":  {bg:"#FAEEDA",color:"#633806"},
   "Responded":      {bg:"#FDE8F0",color:"#7A1535"},
@@ -174,31 +224,33 @@ const STATUS_COLORS = {
   "Proposal Sent":  {bg:"#EAF3DE",color:"#1A6608"},
   "Closed Won":     {bg:"#EAF3DE",color:"#27500A"},
   "Closed Lost":    {bg:"#F3F3F2",color:"#505050"},
-  "No Response":    {bg:"#F3F3F2",color:"#888780"},
+  "No Response":    {bg:"#F3F3F2",color:"#888780"}
 };
 
-const TEMPLATES = {
+var STATUS_LIST = ["New Lead","Outreach Sent","Responded","Demo Scheduled","Demo Done","Proposal Sent","Closed Won","Closed Lost","No Response"];
+
+var TEMPLATES = {
   attorney_email: {
     label:"Attorney — Email",
     subject:"Automating the 425C for [DEBTOR] — saves 3+ hours/month",
-    body:`Hi [NAME],\n\nI noticed [DEBTOR] just filed a Subchapter V case (Case No. [CASE_NO]) in the [DISTRICT]. Congratulations on the new engagement.\n\nWe built a tool specifically for the 425C Monthly Operating Report — the one your team needs to file by the 21st of every month starting now. It connects directly to QuickBooks Online, pulls the financial data automatically, and populates the 425C in about 20 minutes — replacing 3–5 hours of manual work per report.\n\nWould you be open to a 15-minute demo this week?\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]`
+    body:"Hi [NAME],\n\nI noticed [DEBTOR] just filed a Subchapter V case (Case No. [CASE_NO]) in the [DISTRICT]. Congratulations on the new engagement.\n\nWe built a tool specifically for the 425C Monthly Operating Report — the one your team needs to file by the 21st of every month starting now. It connects directly to QuickBooks Online, pulls the financial data automatically, and populates the 425C in about 20 minutes — replacing 3–5 hours of manual work per report.\n\nWould you be open to a 15-minute demo this week?\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"
   },
   attorney_sms: {
     label:"Attorney — SMS",
-    body:`Hi [NAME], saw [DEBTOR] just filed Sub-V (Case [CASE_NO]). We built a QBO-integrated tool that auto-fills the 425C in 20 min — replaces 3-5 hrs/month. Worth a quick call? — [YOUR_NAME], Bookkeeping Innovations`
+    body:"Hi [NAME], saw [DEBTOR] just filed Sub-V (Case [CASE_NO]). We built a QBO-integrated tool that auto-fills the 425C in 20 min — replaces 3-5 hrs/month. Worth a quick call? — [YOUR_NAME], Bookkeeping Innovations"
   },
   debtor_email: {
     label:"Debtor/Owner — Email",
     subject:"Your monthly 425C report — we can automate this",
-    body:`Hi [NAME],\n\nI'm reaching out because [DEBTOR] recently filed under Subchapter V (Case No. [CASE_NO]).\n\nAs part of your case, you're required to file a Monthly Operating Report (Form 425C) by the 21st of every month. We built a tool that connects to your QuickBooks Online and generates this report automatically in about 20 minutes.\n\nGiven your first report is due soon, I'd love to show you how it works in a free 15-minute demo.\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]`
+    body:"Hi [NAME],\n\nI'm reaching out because [DEBTOR] recently filed under Subchapter V (Case No. [CASE_NO]).\n\nAs part of your case, you're required to file a Monthly Operating Report (Form 425C) by the 21st of every month. We built a tool that connects to your QuickBooks Online and generates this report automatically in about 20 minutes.\n\nGiven your first report is due soon, I'd love to show you how it works in a free 15-minute demo.\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"
   },
   debtor_sms: {
     label:"Debtor/Owner — SMS",
-    body:`Hi [NAME] — your Sub-V case requires a 425C MOR due by the 21st each month. We automate it from QBO in 20 min. Free demo? — [YOUR_NAME], Bookkeeping Innovations`
+    body:"Hi [NAME] — your Sub-V case requires a 425C MOR due by the 21st each month. We automate it from QBO in 20 min. Free demo? — [YOUR_NAME], Bookkeeping Innovations"
   }
 };
 
-const ALL_DISTRICTS = [
+var ALL_DISTRICTS = [
   {label:"All Districts",value:"all"},
   {label:"Middle District of Alabama",value:"almb"},{label:"Northern District of Alabama",value:"alnb"},{label:"Southern District of Alabama",value:"alsb"},
   {label:"District of Alaska",value:"akb"},{label:"District of Arizona",value:"arb"},{label:"Eastern District of Arkansas",value:"areb"},{label:"Western District of Arkansas",value:"arwb"},
@@ -236,46 +288,28 @@ const ALL_DISTRICTS = [
 
 // ── INIT ──
 (function init() {
-  const sel = document.getElementById("district");
-  ALL_DISTRICTS.forEach(d => {
-    const o = document.createElement("option");
+  var sel = document.getElementById("district");
+  ALL_DISTRICTS.forEach(function(d) {
+    var o = document.createElement("option");
     o.value = d.value; o.textContent = d.label; sel.appendChild(o);
   });
   document.getElementById("yourName").value  = yourName;
   document.getElementById("yourPhone").value = yourPhone;
+  if (lastRun) document.getElementById("meta-lastrun").textContent = "Last search: "+lastRun;
   setYesterday();
   updateMeta();
   renderOutreachTemplates();
-  if (lastRun) document.getElementById("meta-lastrun").textContent = "Last search: " + lastRun;
 })();
 
-// ── HELPERS ──
-function uid()   { return Math.random().toString(36).slice(2,9); }
-function fmt$(v) { return "$" + Number(v||0).toLocaleString(); }
-function isoToday()     { return new Date().toISOString().slice(0,10); }
-function isoYesterday() { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
-function isoLast7()     { const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); }
-function daysSince(d)   { return d ? Math.floor((Date.now()-new Date(d))/86400000) : null; }
-
-function urgencyLabel(filed) {
-  const d = daysSince(filed);
-  if (d===null) return null;
-  if (d<=3)  return {label:`🔥 Day ${d} — Act now`,color:"#c0392b"};
-  if (d<=10) return {label:`⚡ Day ${d} — Hot lead`,color:"#d35400"};
-  if (d<=21) return {label:`✅ Day ${d} — In window`,color:"#1D9E75"};
-  if (d<=45) return {label:`📋 Day ${d} — Active`,color:"#185FA5"};
-  return {label:`📁 Day ${d}`,color:"#888780"};
-}
-
-function badgeHtml(status) {
-  const s = STATUS_COLORS[status]||{bg:"#eee",color:"#333"};
-  return `<span class="badge" style="background:${s.bg};color:${s.color}">${status}</span>`;
-}
-
-function showToast(msg) {
-  const t = document.getElementById("toast");
-  t.textContent = msg; t.style.display = "block";
-  setTimeout(()=>{ t.style.display="none"; }, 3000);
+// ── META ──
+function updateMeta() {
+  var won  = contacts.filter(function(c){ return c.status==="Closed Won"; }).length;
+  var hot  = contacts.filter(function(c){ var d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
+  var hotEl= document.getElementById("meta-hot");
+  document.getElementById("meta-contacts").textContent = contacts.length+" contacts";
+  document.getElementById("meta-won").textContent = won+" won · Est. MRR "+fmt$(won*200);
+  if (hot>0){ hotEl.textContent="⚡ "+hot+" in 21-day window"; hotEl.style.display="inline"; }
+  else hotEl.style.display="none";
 }
 
 function saveContacts() {
@@ -283,39 +317,9 @@ function saveContacts() {
   updateMeta();
 }
 
-function updateMeta() {
-  const won     = contacts.filter(c=>c.status==="Closed Won").length;
-  const hot     = contacts.filter(c=>{ const d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
-  const hotEl   = document.getElementById("meta-hot");
-  document.getElementById("meta-contacts").textContent = contacts.length + " contacts";
-  document.getElementById("meta-won").textContent = won + " won · Est. MRR " + fmt$(won*200);
-  if (hot > 0) { hotEl.textContent = "⚡ " + hot + " in 21-day window"; hotEl.style.display="inline"; }
-  else hotEl.style.display = "none";
-}
-
-function extractNameFromUrl(url) {
-  if (!url) return "(Unknown)";
-  const parts = url.split("/").filter(Boolean);
-  const slug  = parts[parts.length-1]||parts[parts.length-2]||"";
-  return slug.replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase());
-}
-
-function extractNameFromResult(r) {
-  if (r.caseName && r.caseName.length > 0) return r.caseName;
-  if (r.rawPreview) {
-    try {
-      const m = r.rawPreview.match(/[Ff]iled by ([^.(]+)/);
-      if (m) return m[1].trim();
-      const m2 = r.rawPreview.match(/on behalf of ([^(]+)/);
-      if (m2) return m2[1].trim();
-    } catch(e) {}
-  }
-  return extractNameFromUrl(r.absoluteUrl);
-}
-
 // ── TABS ──
 function showTab(n) {
-  for (let i=0;i<5;i++) {
+  for (var i=0;i<5;i++) {
     document.getElementById("tab-"+i).style.display = i===n?"block":"none";
     document.querySelectorAll(".tab")[i].classList.toggle("active", i===n);
   }
@@ -323,187 +327,184 @@ function showTab(n) {
   if (n===3) renderPipeline();
 }
 
-// ── DATE SHORTCUTS ──
-function setToday()     { const d=isoToday();     document.getElementById("dateFrom").value=d; document.getElementById("dateTo").value=d; }
-function setYesterday() { const d=isoYesterday(); document.getElementById("dateFrom").value=d; document.getElementById("dateTo").value=d; }
-function setLast7()     { document.getElementById("dateFrom").value=isoLast7(); document.getElementById("dateTo").value=isoToday(); }
-
-// ── SEARCH ──
-async function doSearch() {
-  const btn      = document.getElementById("searchBtn");
-  const msgEl    = document.getElementById("search-msg");
-  const resultsEl= document.getElementById("search-results");
-  const debugEl  = document.getElementById("debug-url");
-  const from     = document.getElementById("dateFrom").value;
-  const to       = document.getElementById("dateTo").value;
-  const court    = document.getElementById("district").value;
-  const keyword  = document.getElementById("keyword").value || "subchapter v";
-  const dateLabel= from===to ? `filed on ${from}` : `filed between ${from} and ${to}`;
-
-  btn.disabled = true; btn.textContent = "🔍 Searching…";
-  msgEl.style.display = "none"; resultsEl.innerHTML = ""; debugEl.style.display = "none";
-
-  const params  = new URLSearchParams({ dateFrom:from, dateTo:to, court, q:keyword, maxPages:"3" });
-  const fullUrl = `/search?${params}`;
-  debugEl.innerHTML = `<span style="color:#888">Request: </span><a href="${fullUrl}" target="_blank">${window.location.origin}${fullUrl}</a>`;
-  debugEl.style.display = "block";
-
-  try {
-    const resp = await fetch(fullUrl);
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "Server error " + resp.status);
-
-    const raw = (data.results||[]).filter(r =>
-      r.searchType==="docket-subv" || r.searchType==="recap-subv" || (r.caseName&&r.caseName.length>0)
-    );
-
-    if (raw.length === 0) {
-      showMsg(msgEl, `No cases found ${dateLabel}. CourtListener has a 24–48hr lag — try "Last 7 days".`, "warn");
-    } else {
-      showMsg(msgEl, `✓ ${raw.length} cases found ${dateLabel}. Click "View on CourtListener →" to confirm Sub-V status.`, "ok");
-      renderResults(raw, resultsEl);
-    }
-
-    lastRun = new Date().toLocaleString();
-    localStorage.setItem("bi-lastrun", lastRun);
-    document.getElementById("meta-lastrun").textContent = "Last search: " + lastRun;
-
-  } catch(e) {
-    showMsg(msgEl, "Search failed: " + e.message, "err");
-  }
-
-  btn.disabled = false; btn.textContent = "🔍 Search Today's Filings";
+// ── NAME EXTRACTION ──
+function extractNameFromUrl(url) {
+  if (!url) return "(Unknown)";
+  var parts = url.split("/").filter(Boolean);
+  var slug  = parts[parts.length-1]||parts[parts.length-2]||"";
+  return slug.replace(/-/g," ").replace(/\b\w/g,function(c){ return c.toUpperCase(); });
 }
 
-function showMsg(el, text, type) {
-  el.className = "msg msg-" + type;
-  el.textContent = text;
-  el.style.display = "block";
+function extractNameFromResult(r) {
+  if (r.caseName && r.caseName.length>0) return r.caseName;
+  if (r.rawPreview) {
+    var m = r.rawPreview.match(/[Ff]iled by ([^.(]+)/);
+    if (m) return m[1].trim();
+    var m2 = r.rawPreview.match(/on behalf of ([^(]+)/);
+    if (m2) return m2[1].trim();
+  }
+  return extractNameFromUrl(r.absoluteUrl);
+}
+
+// ── SEARCH ──
+function doSearch() {
+  var btn       = document.getElementById("searchBtn");
+  var msgEl     = document.getElementById("search-msg");
+  var resultsEl = document.getElementById("search-results");
+  var debugEl   = document.getElementById("debug-url");
+  var from      = document.getElementById("dateFrom").value;
+  var to        = document.getElementById("dateTo").value;
+  var court     = document.getElementById("district").value;
+  var keyword   = document.getElementById("keyword").value||"subchapter v";
+  var dateLabel = from===to?"filed on "+from:"filed between "+from+" and "+to;
+
+  btn.disabled=true; btn.textContent="🔍 Searching…";
+  msgEl.style.display="none"; resultsEl.innerHTML=""; debugEl.style.display="none";
+
+  var params = "dateFrom="+from+"&dateTo="+to+"&court="+court+"&q="+encodeURIComponent(keyword)+"&maxPages=3";
+  var fullUrl = "/search?"+params;
+  debugEl.innerHTML = '<span style="color:#888">Request: </span><a href="'+fullUrl+'" target="_blank">'+window.location.origin+fullUrl+'</a>';
+  debugEl.style.display="block";
+
+  fetch(fullUrl)
+    .then(function(resp){ return resp.json().then(function(data){ return {ok:resp.ok,data:data}; }); })
+    .then(function(res) {
+      if (!res.ok) throw new Error(res.data.error||"Server error");
+      var raw = (res.data.results||[]).filter(function(r){
+        return r.searchType==="docket-subv"||r.searchType==="recap-subv"||(r.caseName&&r.caseName.length>0);
+      });
+      if (raw.length===0) {
+        showMsg(msgEl,"No cases found "+dateLabel+". CourtListener has a 24–48hr lag — try 'Last 7 days'.","warn");
+      } else {
+        showMsg(msgEl,"✓ "+raw.length+" cases found "+dateLabel+". Click 'View on CourtListener →' to confirm Sub-V status.","ok");
+        renderResults(raw, resultsEl);
+      }
+      lastRun = new Date().toLocaleString();
+      localStorage.setItem("bi-lastrun", lastRun);
+      document.getElementById("meta-lastrun").textContent = "Last search: "+lastRun;
+    })
+    .catch(function(e){ showMsg(msgEl,"Search failed: "+e.message,"err"); })
+    .finally(function(){ btn.disabled=false; btn.textContent="🔍 Search Today's Filings"; });
 }
 
 function renderResults(raw, el) {
-  el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <div style="font-size:13px;font-weight:500">${raw.length} cases found</div>
-    <button class="btn btn-green btn-small" onclick="addAll()">+ Add All</button>
-  </div>`;
-  window._searchResults = raw;
-  raw.forEach((r,i) => {
-    const name = extractNameFromResult(r);
-    const urg  = r.dateFiled ? urgencyLabel(r.dateFiled) : null;
-    const card = document.createElement("div");
+  _searchResults = raw;
+  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+    +'<div style="font-size:13px;font-weight:500">'+raw.length+' cases found</div>'
+    +'<button class="btn btn-green btn-small" onclick="addAll()">+ Add All</button></div>';
+
+  raw.forEach(function(r, i) {
+    var name = extractNameFromResult(r);
+    var urg  = r.dateFiled ? urgencyLabel(r.dateFiled) : null;
+    var card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `<div class="case-row">
-      <div style="flex:1;min-width:180px">
-        <div class="case-title">${name}</div>
-        <div class="case-meta">
-          ${r.docketNumber?`Case ${r.docketNumber} · `:""}
-          ${r.dateFiled?`Filed ${r.dateFiled} · `:""}
-          <span style="text-transform:uppercase">${r.courtId||""}</span>
-        </div>
-        ${r.attorney?`<div style="font-size:12px;color:#888780;margin-top:2px">Attorney: ${r.attorney}</div>`:""}
-        ${urg?`<div class="urgency" style="color:${urg.color}">${urg.label}</div>`:""}
-        ${r.absoluteUrl?`<a href="${r.absoluteUrl}" target="_blank" style="font-size:11px;display:block;margin-top:3px">View on CourtListener →</a>`:""}
-      </div>
-      <div class="case-actions">
-        <button class="btn btn-small" style="background:#E6F1FB;color:#0C447C;border:none" onclick="addResult(${i})">+ Add</button>
-        <button class="btn btn-green btn-small" onclick="addAndOutreach(${i})">✉️ Outreach</button>
-      </div>
-    </div>`;
+    card.innerHTML = '<div class="case-row">'
+      +'<div style="flex:1;min-width:180px">'
+      +'<div class="case-title">'+name+'</div>'
+      +'<div class="case-meta">'+(r.docketNumber?"Case "+r.docketNumber+" · ":"")+(r.dateFiled?"Filed "+r.dateFiled+" · ":'')+'<span style="text-transform:uppercase">'+(r.courtId||"")+'</span></div>'
+      +(r.attorney?'<div style="font-size:12px;color:#888780;margin-top:2px">Attorney: '+r.attorney+'</div>':"")
+      +(urg?'<div class="urgency" style="color:'+urg.color+'">'+urg.label+'</div>':"")
+      +(r.absoluteUrl?'<a href="'+r.absoluteUrl+'" target="_blank" style="font-size:11px;display:block;margin-top:3px">View on CourtListener →</a>':"")
+      +'</div>'
+      +'<div class="case-actions">'
+      +'<button class="btn btn-small" style="background:#E6F1FB;color:#0C447C;border:none" onclick="addResult('+i+')">+ Add</button>'
+      +'<button class="btn btn-green btn-small" onclick="addAndOutreach('+i+')">✉️ Outreach</button>'
+      +'</div></div>';
     el.appendChild(card);
   });
 }
 
-window._searchResults = [];
+function resultToContact(r) {
+  return {
+    id:uid(), debtor:extractNameFromResult(r),
+    caseNo:r.docketNumber||"", court:r.courtId||"",
+    filed:r.dateFiled||"", attorney:r.attorney||"",
+    name:"", firm:"", email:"", phone:"", district:r.courtId||"",
+    status:"New Lead", notes:"", contactType:"attorney",
+    url:r.absoluteUrl||"", clId:r.docketId, source:"CourtListener"
+  };
+}
 
 function addResult(i) {
-  const r = window._searchResults[i];
-  const c = resultToContact(r);
-  if (contacts.find(x=>x.caseNo&&x.caseNo===c.caseNo)) { showToast("Already in list."); return; }
+  var r=_searchResults[i]; if(!r) return;
+  var c=resultToContact(r);
+  if (contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ showToast("Already in list."); return; }
   contacts.push(c); saveContacts(); showToast("Added!");
 }
 
 function addAll() {
-  let n=0;
-  (window._searchResults||[]).forEach(r=>{
-    const c=resultToContact(r);
-    if (!contacts.find(x=>x.caseNo&&x.caseNo===c.caseNo)) { contacts.push(c); n++; }
+  var n=0;
+  _searchResults.forEach(function(r){
+    var c=resultToContact(r);
+    if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); n++; }
   });
-  saveContacts(); showToast(`Added ${n} contacts.`);
+  saveContacts(); showToast("Added "+n+" contacts.");
 }
 
 function addAndOutreach(i) {
-  const r = window._searchResults[i];
-  const c = resultToContact(r);
-  if (!contacts.find(x=>x.caseNo&&x.caseNo===c.caseNo)) { contacts.push(c); saveContacts(); }
+  var r=_searchResults[i]; if(!r) return;
+  var c=resultToContact(r);
+  if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); saveContacts(); }
   openOutreach(c);
-}
-
-function resultToContact(r) {
-  return {
-    id: uid(), debtor: extractNameFromResult(r),
-    caseNo: r.docketNumber||"", court: r.courtId||"",
-    filed: r.dateFiled||"", attorney: r.attorney||"",
-    name:"", firm:"", email:"", phone:"", district: r.courtId||"",
-    status:"New Lead", notes:"", contactType:"attorney",
-    url: r.absoluteUrl||"", clId: r.docketId, source:"CourtListener"
-  };
 }
 
 // ── CONTACTS ──
 function renderContacts() {
-  const q      = (document.getElementById("filterQ").value||"").toLowerCase();
-  const status = document.getElementById("filterStatus").value;
-  const el     = document.getElementById("contacts-list");
-  const filtered = contacts.filter(c=>{
+  var q      = (document.getElementById("filterQ").value||"").toLowerCase();
+  var status = document.getElementById("filterStatus").value;
+  var el     = document.getElementById("contacts-list");
+  var filtered = contacts.filter(function(c){
     if (status!=="All"&&c.status!==status) return false;
     if (!q) return true;
-    return [c.name,c.firm,c.debtor,c.caseNo,c.district,c.court,c.attorney].some(f=>(f||"").toLowerCase().includes(q));
+    return [c.name,c.firm,c.debtor,c.caseNo,c.district,c.court,c.attorney].some(function(f){ return (f||"").toLowerCase().includes(q); });
   });
-  if (!filtered.length) { el.innerHTML=`<div style="text-align:center;padding:32px 0;font-size:13px;color:#888780">${contacts.length===0?"No contacts yet — run a search to find new filings.":"No contacts match your filters."}</div>`; return; }
-  el.innerHTML = "";
-  filtered.forEach(c=>{
-    const urg = c.filed ? urgencyLabel(c.filed) : null;
-    const sc  = STATUS_COLORS[c.status]||{bg:"#eee",color:"#333"};
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `<div class="case-row">
-      <div style="flex:1;min-width:160px">
-        <div style="font-weight:600;font-size:13px">${c.name||c.attorney||"(No name — click Edit)"} ${c.firm?`<span style="font-weight:400;color:#888780">· ${c.firm}</span>`:""}</div>
-        <div class="case-meta">${c.debtor?`<strong>${c.debtor}</strong> · `:""} ${c.caseNo?`Case ${c.caseNo} · `:""} ${c.filed?c.filed+" · ":""} <span style="text-transform:uppercase">${c.court||c.district||""}</span></div>
-        ${urg?`<div class="urgency" style="color:${urg.color}">${urg.label}</div>`:""}
-        ${c.email?`<div style="font-size:12px;color:#888780;margin-top:2px">${c.email}${c.phone?" · "+c.phone:""}</div>`:""}
-        ${c.notes?`<div style="font-size:12px;color:#aaa;margin-top:4px;background:#f9f9f8;border-radius:5px;padding:4px 7px">${c.notes}</div>`:""}
-        ${c.url?`<a href="${c.url}" target="_blank" style="font-size:11px">View case →</a>`:""}
-      </div>
-      <div class="case-actions">
-        <select onchange="updateStatus('${c.id}',this.value)" style="padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;border:none;background:${sc.bg};color:${sc.color};cursor:pointer;font-family:inherit">
-          ${["New Lead","Outreach Sent","Responded","Demo Scheduled","Demo Done","Proposal Sent","Closed Won","Closed Lost","No Response"].map(s=>`<option${s===c.status?" selected":""}>${s}</option>`).join("")}
-        </select>
-        <button class="btn btn-small" style="background:#E1F5EE;color:#085041;border:none" onclick="openOutreachById('${c.id}')">✉️</button>
-        <button class="btn btn-outline btn-small" onclick="editContact('${c.id}')">Edit</button>
-        <button class="btn btn-small" style="background:#FAEEDA;color:#633806;border:none" onclick="removeContact('${c.id}')">✕</button>
-      </div>
-    </div>`;
+  if (!filtered.length) {
+    el.innerHTML='<div style="text-align:center;padding:32px 0;font-size:13px;color:#888780">'+(contacts.length===0?"No contacts yet — run a search to find new filings.":"No contacts match your filters.")+'</div>';
+    return;
+  }
+  el.innerHTML="";
+  filtered.forEach(function(c){
+    var urg = c.filed ? urgencyLabel(c.filed) : null;
+    var sc  = STATUS_COLORS[c.status]||{bg:"#eee",color:"#333"};
+    var opts= STATUS_LIST.map(function(s){ return '<option'+(s===c.status?" selected":"")+'>'+s+'</option>'; }).join("");
+    var card= document.createElement("div");
+    card.className="card";
+    card.innerHTML='<div class="case-row">'
+      +'<div style="flex:1;min-width:160px">'
+      +'<div style="font-weight:600;font-size:13px">'+(c.name||c.attorney||"(No name — click Edit)")+(c.firm?' <span style="font-weight:400;color:#888780">· '+c.firm+'</span>':"")+'</div>'
+      +'<div class="case-meta">'+(c.debtor?"<strong>"+c.debtor+"</strong> · ":"")+(c.caseNo?"Case "+c.caseNo+" · ":"")+(c.filed?c.filed+" · ":'')+'<span style="text-transform:uppercase">'+(c.court||c.district||"")+'</span></div>'
+      +(urg?'<div class="urgency" style="color:'+urg.color+'">'+urg.label+'</div>':"")
+      +(c.email?'<div style="font-size:12px;color:#888780;margin-top:2px">'+c.email+(c.phone?" · "+c.phone:"")+'</div>':"")
+      +(c.notes?'<div style="font-size:12px;color:#aaa;margin-top:4px;background:#f9f9f8;border-radius:5px;padding:4px 7px">'+c.notes+'</div>':"")
+      +(c.url?'<a href="'+c.url+'" target="_blank" style="font-size:11px">View case →</a>':"")
+      +'</div>'
+      +'<div class="case-actions">'
+      +'<select onchange="updateStatus(\''+c.id+'\',this.value)" style="padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;border:none;background:'+sc.bg+';color:'+sc.color+';cursor:pointer;font-family:inherit">'+opts+'</select>'
+      +'<button class="btn btn-small" style="background:#E1F5EE;color:#085041;border:none" onclick="openOutreachById(\''+c.id+'\')">✉️</button>'
+      +'<button class="btn btn-outline btn-small" onclick="editContact(\''+c.id+'\')">Edit</button>'
+      +'<button class="btn btn-small" style="background:#FAEEDA;color:#633806;border:none" onclick="removeContact(\''+c.id+'\')">✕</button>'
+      +'</div></div>';
     el.appendChild(card);
   });
 }
 
 function updateStatus(id, val) {
-  const c = contacts.find(x=>x.id===id); if(!c) return;
-  c.status = val; saveContacts(); showToast("Status updated.");
+  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
+  c.status=val; saveContacts(); showToast("Status updated.");
 }
 
 function removeContact(id) {
-  contacts = contacts.filter(c=>c.id!==id); saveContacts(); renderContacts(); showToast("Removed.");
+  contacts=contacts.filter(function(c){ return c.id!==id; });
+  saveContacts(); renderContacts(); showToast("Removed.");
 }
 
 function editContact(id) {
-  const c = contacts.find(x=>x.id===id); if(!c) return;
-  const name  = prompt("Contact name:", c.name||"");  if(name!==null) c.name=name;
-  const firm  = prompt("Firm:", c.firm||"");           if(firm!==null) c.firm=firm;
-  const email = prompt("Email:", c.email||"");         if(email!==null) c.email=email;
-  const phone = prompt("Phone:", c.phone||"");         if(phone!==null) c.phone=phone;
-  const notes = prompt("Notes:", c.notes||"");         if(notes!==null) c.notes=notes;
+  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
+  var name=prompt("Contact name:",c.name||""); if(name!==null) c.name=name;
+  var firm=prompt("Firm:",c.firm||""); if(firm!==null) c.firm=firm;
+  var email=prompt("Email:",c.email||""); if(email!==null) c.email=email;
+  var phone=prompt("Phone:",c.phone||""); if(phone!==null) c.phone=phone;
+  var notes=prompt("Notes:",c.notes||""); if(notes!==null) c.notes=notes;
   saveContacts(); renderContacts(); showToast("Saved.");
 }
 
@@ -520,113 +521,108 @@ function buildMsg(c, key) {
 
 function renderOutreachTemplates() {
   if (outreachContact) return;
-  const el = document.getElementById("outreach-content");
-  const tmplBtns = Object.keys(TEMPLATES).map(k=>
-    `<button class="btn btn-outline btn-small${k===currentTmpl?" active":""}" onclick="setTmpl('${k}')" style="${k===currentTmpl?"background:#f0f0ef;font-weight:500;":""}">
-      ${TEMPLATES[k].label}
-    </button>`
-  ).join("");
-  const t = TEMPLATES[currentTmpl];
-  el.innerHTML = `
-    <div style="font-size:13px;font-weight:500;margin-bottom:10px">Outreach Templates</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tmplBtns}</div>
-    ${t.subject?`<div style="font-size:12px;color:#888780;margin-bottom:8px"><strong>Subject:</strong> ${t.subject}</div>`:""}
-    <pre style="background:#f0f0ef;border-radius:8px;padding:12px 14px;border:0.5px solid #e8e8e5">${t.body}</pre>
-    <div style="font-size:12px;color:#888780;margin-top:10px">Click ✉️ on any contact to personalize and send. Add your name and phone in ⚙️ Settings.</div>
-  `;
+  var el   = document.getElementById("outreach-content");
+  var btns = Object.keys(TEMPLATES).map(function(k){
+    return '<button class="btn btn-outline btn-small" onclick="setTmpl(\''+k+'\')" style="'+(k===currentTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TEMPLATES[k].label+'</button>';
+  }).join("");
+  var t = TEMPLATES[currentTmpl];
+  el.innerHTML='<div style="font-size:13px;font-weight:500;margin-bottom:10px">Outreach Templates</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+btns+'</div>'
+    +(t.subject?'<div style="font-size:12px;color:#888780;margin-bottom:8px"><strong>Subject:</strong> '+t.subject+'</div>':"")
+    +'<pre style="background:#f0f0ef;border-radius:8px;padding:12px 14px;border:0.5px solid #e8e8e5">'+t.body+'</pre>'
+    +'<div style="font-size:12px;color:#888780;margin-top:10px">Click ✉️ on any contact to personalize and send. Add your name and phone in ⚙️ Settings.</div>';
 }
 
-function setTmpl(k) { currentTmpl=k; if(outreachContact) renderOutreachCompose(); else renderOutreachTemplates(); }
+function setTmpl(k) {
+  currentTmpl=k;
+  if (outreachContact) renderOutreachCompose(); else renderOutreachTemplates();
+}
 
 function openOutreach(c) {
-  outreachContact = c;
-  showTab(2);
-  renderOutreachCompose();
+  outreachContact=c; showTab(2); renderOutreachCompose();
 }
 
 function openOutreachById(id) {
-  const c = contacts.find(x=>x.id===id);
+  var c=contacts.find(function(x){ return x.id===id; });
   if (c) openOutreach(c);
 }
 
 function renderOutreachCompose() {
-  const c  = outreachContact;
-  const el = document.getElementById("outreach-content");
-  const msg = buildMsg(c, currentTmpl);
-  const t   = TEMPLATES[currentTmpl];
-  const subject = (t.subject||"").replace(/\[DEBTOR\]/g,c.debtor||"").replace(/\[CASE_NO\]/g,c.caseNo||"");
-  const tmplBtns = Object.keys(TEMPLATES).map(k=>
-    `<button class="btn btn-outline btn-small" onclick="setTmpl('${k}')" style="${k===currentTmpl?"background:#f0f0ef;font-weight:500;":""}">${TEMPLATES[k].label}</button>`
-  ).join("");
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-      <button class="btn btn-outline btn-small" onclick="closeOutreach()">← Back</button>
-      <div style="font-size:14px;font-weight:600">${c.debtor}</div>
-      <div style="font-size:12px;color:#888780">${c.caseNo?"Case "+c.caseNo:""} ${c.filed?"· Filed "+c.filed:""}</div>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tmplBtns}</div>
-    ${subject?`<div style="margin-bottom:8px"><label>Subject</label><input type="text" value="${subject}" readonly/></div>`:""}
-    <div style="margin-bottom:10px"><label>Message — edit as needed</label>
-      <textarea id="outreach-msg" rows="14">${msg}</textarea>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" style="flex:1" onclick="copyMsg()">📋 Copy</button>
-      ${c.email?`<a href="mailto:${c.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(msg)}" class="btn btn-green" style="flex:1;text-align:center;text-decoration:none">📧 Open in Email</a>`:""}
-      ${c.phone&&currentTmpl.includes("sms")?`<a href="sms:${c.phone}?body=${encodeURIComponent(msg)}" class="btn" style="flex:1;background:#7C3AED;color:#fff;text-align:center;text-decoration:none">💬 SMS</a>`:""}
-      <button class="btn btn-outline" style="flex:1" onclick="markSent('${c.id}')">✓ Mark Sent</button>
-    </div>
-  `;
+  var c   = outreachContact;
+  var el  = document.getElementById("outreach-content");
+  var msg = buildMsg(c, currentTmpl);
+  var t   = TEMPLATES[currentTmpl];
+  var subject = (t.subject||"").replace(/\[DEBTOR\]/g,c.debtor||"").replace(/\[CASE_NO\]/g,c.caseNo||"");
+  var btns = Object.keys(TEMPLATES).map(function(k){
+    return '<button class="btn btn-outline btn-small" onclick="setTmpl(\''+k+'\')" style="'+(k===currentTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TEMPLATES[k].label+'</button>';
+  }).join("");
+  var msgEscaped = msg.replace(/`/g,"\\`").replace(/\$/g,"\\$");
+  el.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">'
+    +'<button class="btn btn-outline btn-small" onclick="closeOutreach()">← Back</button>'
+    +'<div style="font-size:14px;font-weight:600">'+c.debtor+'</div>'
+    +'<div style="font-size:12px;color:#888780">'+(c.caseNo?"Case "+c.caseNo:"")+(c.filed?" · Filed "+c.filed:"")+'</div></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+btns+'</div>'
+    +(subject?'<div style="margin-bottom:8px"><label>Subject</label><input type="text" id="out-subject" value="'+subject.replace(/"/g,"&quot;")+'" readonly/></div>':"")
+    +'<div style="margin-bottom:10px"><label>Message — edit as needed</label>'
+    +'<textarea id="outreach-msg" rows="14">'+msg+'</textarea></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    +'<button class="btn btn-primary" style="flex:1" onclick="copyMsg()">📋 Copy</button>'
+    +(c.email?'<a href="mailto:'+c.email+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(msg)+'" class="btn btn-green" style="flex:1;text-align:center;text-decoration:none">📧 Open in Email</a>':"")
+    +(c.phone&&currentTmpl.includes("sms")?'<a href="sms:'+c.phone+'?body='+encodeURIComponent(msg)+'" class="btn" style="flex:1;background:#7C3AED;color:#fff;text-align:center;text-decoration:none">💬 SMS</a>':"")
+    +'<button class="btn btn-outline" style="flex:1" onclick="markSent(\''+c.id+'\')">✓ Mark Sent</button>'
+    +'</div>';
 }
 
 function closeOutreach() { outreachContact=null; renderOutreachTemplates(); }
 
 function copyMsg() {
-  const txt = document.getElementById("outreach-msg").value;
-  navigator.clipboard?.writeText(txt); showToast("Copied!");
+  var txt=document.getElementById("outreach-msg").value;
+  if (navigator.clipboard) navigator.clipboard.writeText(txt);
+  showToast("Copied!");
 }
 
 function markSent(id) {
-  const c = contacts.find(x=>x.id===id); if(!c) return;
+  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
   c.status="Outreach Sent"; saveContacts(); showToast("Marked as Outreach Sent.");
 }
 
 // ── PIPELINE ──
 function renderPipeline() {
-  const statuses = ["New Lead","Outreach Sent","Responded","Demo Scheduled","Demo Done","Proposal Sent","Closed Won","Closed Lost","No Response"];
-  const grid = document.getElementById("pipeline-grid");
-  const summ = document.getElementById("pipeline-summary");
-  grid.innerHTML = "";
-  statuses.forEach(s=>{
-    const cnt = contacts.filter(c=>c.status===s).length;
-    const sc  = STATUS_COLORS[s]||{bg:"#eee",color:"#333"};
-    const tile = document.createElement("div");
-    tile.className = "pipeline-tile";
-    tile.onclick = ()=>{ document.getElementById("filterStatus").value=s; showTab(1); };
-    tile.innerHTML = `<span class="badge" style="background:${sc.bg};color:${sc.color};font-size:10px">${s}</span><div class="count">${cnt}</div>`;
+  var grid=document.getElementById("pipeline-grid");
+  var summ=document.getElementById("pipeline-summary");
+  grid.innerHTML="";
+  STATUS_LIST.forEach(function(s){
+    var cnt=contacts.filter(function(c){ return c.status===s; }).length;
+    var sc=STATUS_COLORS[s]||{bg:"#eee",color:"#333"};
+    var tile=document.createElement("div");
+    tile.className="pipeline-tile";
+    tile.onclick=function(){ document.getElementById("filterStatus").value=s; showTab(1); };
+    tile.innerHTML='<span class="badge" style="background:'+sc.bg+';color:'+sc.color+';font-size:10px">'+s+'</span><div class="count">'+cnt+'</div>';
     grid.appendChild(tile);
   });
-  const won  = contacts.filter(c=>c.status==="Closed Won").length;
-  const hot  = contacts.filter(c=>{ const d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
-  const active = contacts.filter(c=>!["Closed Won","Closed Lost","No Response"].includes(c.status)).length;
-  const demos  = contacts.filter(c=>["Demo Scheduled","Demo Done"].includes(c.status)).length;
-  summ.innerHTML = [
-    ["Total contacts", contacts.length],
-    ["⚡ In 21-day window", hot, "#d35400"],
-    ["Active pipeline", active],
-    ["Demos scheduled/done", demos],
-    ["Closed Won", won, "#27500A"],
-    ["Est. MRR @ $200/client", fmt$(won*200), "#1D9E75"],
-    ["Est. ARR run rate", fmt$(won*200*12), "#1D9E75"],
-  ].map(([l,v,color])=>`<div class="summary-row"><span style="color:#888780">${l}</span><span style="font-weight:500;color:${color||"#1a1a18"}">${v}</span></div>`).join("");
+  var won   =contacts.filter(function(c){ return c.status==="Closed Won"; }).length;
+  var hot   =contacts.filter(function(c){ var d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
+  var active=contacts.filter(function(c){ return !["Closed Won","Closed Lost","No Response"].includes(c.status); }).length;
+  var demos =contacts.filter(function(c){ return ["Demo Scheduled","Demo Done"].includes(c.status); }).length;
+  summ.innerHTML=[
+    ["Total contacts",contacts.length],
+    ["⚡ In 21-day window",hot,"#d35400"],
+    ["Active pipeline",active],
+    ["Demos scheduled/done",demos],
+    ["Closed Won",won,"#27500A"],
+    ["Est. MRR @ $200/client",fmt$(won*200),"#1D9E75"],
+    ["Est. ARR run rate",fmt$(won*200*12),"#1D9E75"]
+  ].map(function(row){
+    return '<div class="summary-row"><span style="color:#888780">'+row[0]+'</span><span style="font-weight:500;color:'+(row[2]||"#1a1a18")+'">'+row[1]+'</span></div>';
+  }).join("");
 }
 
 // ── SETTINGS ──
 function saveProfile() {
-  yourName  = document.getElementById("yourName").value;
-  yourPhone = document.getElementById("yourPhone").value;
-  localStorage.setItem("bi-name",  yourName);
-  localStorage.setItem("bi-phone", yourPhone);
+  yourName =document.getElementById("yourName").value;
+  yourPhone=document.getElementById("yourPhone").value;
+  localStorage.setItem("bi-name",yourName);
+  localStorage.setItem("bi-phone",yourPhone);
   showToast("Profile saved!");
 }
 </script>
