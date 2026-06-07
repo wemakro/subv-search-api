@@ -1,44 +1,26 @@
 require("dotenv").config();
 const express = require("express");
 const cors    = require("cors");
+const path    = require("path");
 const routes  = require("./routes");
 const logger  = require("./logger");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// Explicit CORS — allow all origins (required for Claude artifact access)
-app.use(cors({
-  origin: "*",
-  methods: ["GET","POST","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization","Accept"]
-}));
-
-// Handle preflight OPTIONS requests
+app.use(cors({ origin: "*", methods: ["GET","POST","OPTIONS"], allowedHeaders: ["Content-Type","Authorization","Accept"] }));
 app.options("*", cors());
-
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+// Serve the CRM frontend from /public
+app.use(express.static(path.join(__dirname, "../public")));
+
+app.get("/status", (req, res) => {
   res.json({
     status:  "ok",
     service: "Sub-V Search API v3",
     token:   process.env.COURTLISTENER_TOKEN ? "set" : "missing",
-    version: "3.0.0",
-    endpoints: [
-      "GET /health",
-      "GET /search?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD&court=all&maxPages=3",
-      "GET /cases",
-      "GET /cases/:docketId",
-      "GET /cases/:docketId/hydrate",
-      "POST /cases/:docketId/hydrate",
-      "GET /cases/:docketId/principals",
-      "GET /cases/:docketId/outreach-contacts",
-      "GET /cases/:docketId/petition-documents",
-      "GET /cases/:docketId/raw",
-      "POST /jobs/discover-subv"
-    ]
+    version: "3.0.0"
   });
 });
 
