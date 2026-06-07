@@ -250,12 +250,12 @@ const ALL_DISTRICTS = [
 })();
 
 // ── HELPERS ──
-const uid   = () => Math.random().toString(36).slice(2,9);
-const fmt$  = v => "$" + Number(v||0).toLocaleString();
-const isoToday     = () => new Date().toISOString().slice(0,10);
-const isoYesterday = () => { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); };
-const isoLast7     = () => { const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); };
-const daysSince    = d => d ? Math.floor((Date.now()-new Date(d))/86400000) : null;
+function uid()   { return Math.random().toString(36).slice(2,9); }
+function fmt$(v) { return "$" + Number(v||0).toLocaleString(); }
+function isoToday()     { return new Date().toISOString().slice(0,10); }
+function isoYesterday() { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
+function isoLast7()     { const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); }
+function daysSince(d)   { return d ? Math.floor((Date.now()-new Date(d))/86400000) : null; }
 
 function urgencyLabel(filed) {
   const d = daysSince(filed);
