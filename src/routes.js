@@ -1,5 +1,10 @@
 const express = require("express");
+const cors    = require("cors");
 const router  = express.Router();
+
+// Apply CORS to all routes
+router.use(cors({ origin: "*", methods: ["GET","POST","OPTIONS"], allowedHeaders: ["Content-Type","Authorization","Accept"] }));
+router.options("*", cors());
 const { discoverSubchapterVCases } = require("./courtListenerSearchService");
 const { hydrateDocket }            = require("./caseHydrationService");
 const store                        = require("./store");
