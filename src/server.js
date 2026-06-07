@@ -7,10 +7,20 @@ const logger  = require("./logger");
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Explicit CORS — allow all origins (required for Claude artifact access)
+app.use(cors({
+  origin: "*",
+  methods: ["GET","POST","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization","Accept"]
+}));
+
+// Handle preflight OPTIONS requests
+app.options("*", cors());
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.json({
     status:  "ok",
     service: "Sub-V Search API v3",
