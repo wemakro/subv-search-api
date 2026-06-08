@@ -409,6 +409,7 @@ function renderResults(raw, el) {
       +'<div class="case-actions">'
       +'<button class="btn btn-small" style="background:#E6F1FB;color:#0C447C;border:none" onclick="addResult('+i+')">+ Add</button>'
       +'<button class="btn btn-green btn-small" onclick="addAndOutreach('+i+')">✉️ Outreach</button>'
+      +'<button class="btn btn-small" style="background:#EEEDFE;color:#3C3489;border:none" onclick="enrichResult('+i+')">🔍 Enrich</button>'
       +'</div></div>';
     el.appendChild(card);
   });
@@ -441,7 +442,82 @@ function addAll() {
   saveContacts(); showToast("Added "+n+" contacts.");
 }
 
-function addAndOutreach(i) {
+function enrichResult(i) {
+  var r = _searchResults[i]; if (!r||!r.docketId) { alert("No docket ID available for this case."); return; }
+  var c = resultToContact(r);
+  if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); saveContacts(); }
+
+  // Show loading state
+  showToast("Enriching case — this takes 15–30 seconds…");
+
+  fetch("/cases/"+r.docketId+"/enrich")
+    .then(function(resp){ return resp.json(); })
+    .then(function(data) {
+      var e = data.enrichment;
+      var lines = [];
+
+      // Company
+      if (e.company) {
+        lines.push("🏢 COMPANY: " + (e.company.name||""));
+        if (e.company.phone)   lines.push("   📞 " + e.company.phone + " ("+e.company.source+")");
+        if (e.company.website) lines.push("   🌐 " + e.company.website);
+        if (e.company.address) lines.push("   📍 " + e.company.address);
+        if (e.company.mapsUrl) lines.push("   🗺️ " + e.company.mapsUrl);
+        (e.company.emails||[]).forEach(function(em){ lines.push("   📧 " + em + " (found on website)"); });
+        (e.company.scrapedPhones||[]).forEach(function(ph){ lines.push("   📞 " + ph + " (found on website)"); });
+      }
+
+      // Principal email guesses
+      (e.principals||[]).forEach(function(p){
+        if (p.name) {
+          lines.push("\n👤 PRINCIPAL: " + p.name + " ("+p.role+")");
+          (p.emailGuesses||[]).slice(0,3).forEach(function(g){
+            lines.push("   📧 " + g.email + " ⚠️ estimated pattern: "+g.pattern);
+          });
+        }
+      });
+
+      // Trustee
+      if (e.trustee?.name) {
+        lines.push("\n⚖️ TRUSTEE: " + e.trustee.name);
+        if (e.trustee.email) lines.push("   📧 " + e.trustee.email);
+        if (e.trustee.phone) lines.push("   📞 " + e.trustee.phone);
+        if (e.trustee.url)   lines.push("   🔗 " + e.trustee.url);
+      }
+
+      // Attorneys
+      (e.attorneys||[]).forEach(function(a){
+        lines.push("\n👔 ATTORNEY: " + a.name);
+        if (a.firm)      lines.push("   🏛️ " + a.firm);
+        if (a.email)     lines.push("   📧 " + a.email);
+        if (a.phone)     lines.push("   📞 " + a.phone);
+        if (a.barUrl)    lines.push("   🔗 State Bar: " + a.barUrl);
+        if (a.note)      lines.push("   ℹ️ " + a.note);
+      });
+
+      if (e.warnings?.length) {
+        lines.push("\n⚠️ WARNINGS:");
+        e.warnings.forEach(function(w){ lines.push("   " + w); });
+      }
+
+      // Update contact in CRM with found data
+      var contact = contacts.find(function(x){ return x.caseNo===c.caseNo; });
+      if (contact) {
+        if (e.company?.phone && !contact.phone) contact.phone = e.company.phone;
+        if (e.company?.website && !contact.website) contact.website = e.company.website;
+        if (e.company?.emails?.[0] && !contact.email) contact.email = e.company.emails[0];
+        if (e.attorneys?.[0]?.name && !contact.name) contact.name = e.attorneys[0].name;
+        if (e.attorneys?.[0]?.firm && !contact.firm) contact.firm = e.attorneys[0].firm;
+        if (e.attorneys?.[0]?.email && !contact.email) contact.email = e.attorneys[0].email;
+        if (e.attorneys?.[0]?.phone && !contact.phone) contact.phone = e.attorneys[0].phone;
+        saveContacts();
+      }
+
+      alert("ENRICHMENT RESULTS\n\n" + lines.join("\n"));
+    })
+    .catch(function(err){ alert("Enrichment failed: " + err.message); });
+}
+
   var r=_searchResults[i]; if(!r) return;
   var c=resultToContact(r);
   if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); saveContacts(); }
