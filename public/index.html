@@ -5,681 +5,638 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Sub-V MOR Outreach CRM — Bookkeeping Innovations</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:system-ui,sans-serif;background:#f9f9f8;color:#1a1a18;min-height:100vh}
-  .app{max-width:980px;margin:0 auto;padding:16px}
-  .header{margin-bottom:14px}
-  .header h1{font-size:18px;font-weight:600}
-  .meta{font-size:12px;color:#888780;margin-top:3px;display:flex;gap:12px;flex-wrap:wrap}
-  .hot{color:#d35400;font-weight:500}
-  .tabs{display:flex;gap:5px;margin-bottom:16px;flex-wrap:wrap}
-  .tab{padding:6px 14px;border-radius:8px;border:0.5px solid #d4d4d0;background:transparent;color:#888780;font-size:13px;cursor:pointer;font-family:inherit}
-  .tab.active{background:#f0f0ef;color:#1a1a18;font-weight:500}
-  .card{background:#fff;border:0.5px solid #e8e8e5;border-radius:10px;padding:12px 14px;margin-bottom:8px}
-  .section{background:#f0f0ef;border-radius:10px;padding:14px;margin-bottom:12px}
-  label{font-size:11px;color:#888780;display:block;margin-bottom:3px}
-  input,select,textarea{width:100%;padding:7px 10px;border-radius:7px;border:0.5px solid #d4d4d0;background:#fff;color:#1a1a18;font-size:13px;font-family:inherit}
-  textarea{resize:vertical}
-  .btn{padding:8px 16px;border-radius:8px;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}
-  .btn-primary{background:#185FA5;color:#fff}
-  .btn-primary:disabled{background:#888;cursor:not-allowed}
-  .btn-green{background:#1D9E75;color:#fff}
-  .btn-outline{background:transparent;border:0.5px solid #d4d4d0;color:#888780}
-  .btn-small{padding:4px 10px;font-size:12px}
-  .btn-full{width:100%;padding:10px;font-size:14px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .span2{grid-column:1/-1}
-  .shortcuts{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
-  .msg{padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;line-height:1.5}
-  .msg-ok{background:#E1F5EE;color:#085041}
-  .msg-warn{background:#FAEEDA;color:#633806}
-  .msg-err{background:#FDE8F0;color:#7A1535}
-  .msg-info{background:#E6F1FB;color:#0C447C}
-  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;white-space:nowrap}
-  .urgency{font-size:12px;font-weight:600;margin-top:4px}
-  .case-title{font-weight:600;font-size:14px}
-  .case-meta{font-size:12px;color:#888780;margin-top:3px}
-  .case-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;align-items:center}
-  .case-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
-  .debug-url{padding:8px 10px;background:#fff;border-radius:7px;font-size:11px;font-family:monospace;word-break:break-all;border:0.5px solid #e8e8e5;margin-top:8px}
-  .pipeline-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:18px}
-  .pipeline-tile{background:#f0f0ef;border-radius:9px;padding:10px 12px;cursor:pointer}
-  .pipeline-tile .count{font-size:22px;font-weight:500;margin-top:4px}
-  .summary-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:0.5px solid #e8e8e5;font-size:13px}
-  .summary-row:last-child{border-bottom:none}
-  a{color:#185FA5}
-  .toast{position:fixed;top:14px;right:14px;background:#1D9E75;color:#fff;padding:9px 16px;border-radius:8px;z-index:999;font-size:13px;box-shadow:0 2px 12px rgba(0,0,0,.2);display:none}
-  pre{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.7}
-  @media(max-width:600px){.grid2{grid-template-columns:1fr}.case-row{flex-direction:column}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f9f9f8;color:#1a1a18;min-height:100vh}
+.app{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:18px;font-weight:600}
+.meta{font-size:12px;color:#888780;margin-top:3px;display:flex;gap:12px;flex-wrap:wrap}
+.hot{color:#d35400;font-weight:500}
+.tabs{display:flex;gap:5px;margin:14px 0;flex-wrap:wrap}
+.tab{padding:6px 14px;border-radius:8px;border:0.5px solid #d4d4d0;background:transparent;color:#888780;font-size:13px;cursor:pointer;font-family:inherit}
+.tab.active{background:#f0f0ef;color:#1a1a18;font-weight:500}
+.card{background:#fff;border:0.5px solid #e8e8e5;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.section{background:#f0f0ef;border-radius:10px;padding:14px;margin-bottom:12px}
+label{font-size:11px;color:#888780;display:block;margin-bottom:3px}
+input,select,textarea{width:100%;padding:7px 10px;border-radius:7px;border:0.5px solid #d4d4d0;background:#fff;color:#1a1a18;font-size:13px;font-family:inherit}
+textarea{resize:vertical}
+.btn{padding:7px 14px;border-radius:8px;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block;text-align:center}
+.btn-primary{background:#185FA5;color:#fff}
+.btn-primary:disabled{background:#888;cursor:not-allowed}
+.btn-green{background:#1D9E75;color:#fff}
+.btn-outline{background:transparent;border:0.5px solid #d4d4d0;color:#888780}
+.btn-purple{background:#EEEDFE;color:#3C3489}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-full{width:100%;padding:10px;font-size:14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.span2{grid-column:1/-1}
+.row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.actions{display:flex;gap:5px;flex-shrink:0;flex-wrap:wrap;align-items:flex-start;margin-top:4px}
+.msg{padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;line-height:1.5}
+.msg-ok{background:#E1F5EE;color:#085041}
+.msg-warn{background:#FAEEDA;color:#633806}
+.msg-err{background:#FDE8F0;color:#7A1535}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500}
+.urg{font-size:12px;font-weight:600;margin-top:3px}
+.info-row{font-size:12px;color:#888780;margin-top:2px;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.info-label{font-weight:500;color:#555;white-space:nowrap}
+.enrich-box{margin-top:8px;padding:10px 12px;background:#f0f0ef;border-radius:8px;font-size:12px;line-height:1.8}
+.enrich-section{margin-bottom:6px}
+.enrich-title{font-weight:600;font-size:12px;color:#1a1a18;margin-bottom:2px}
+.enrich-val{color:#185FA5}
+.est{color:#BA7517;font-size:11px}
+.pipeline-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:16px}
+.p-tile{background:#f0f0ef;border-radius:9px;padding:10px 12px;cursor:pointer}
+.p-tile .cnt{font-size:22px;font-weight:500;margin-top:4px}
+.sumrow{display:flex;justify-content:space-between;padding:7px 0;border-bottom:0.5px solid #e8e8e5;font-size:13px}
+.sumrow:last-child{border-bottom:none}
+a{color:#185FA5}
+.toast{position:fixed;top:14px;right:14px;background:#1D9E75;color:#fff;padding:9px 16px;border-radius:8px;z-index:999;font-size:13px;box-shadow:0 2px 12px rgba(0,0,0,.18);display:none}
+.debug{padding:7px 10px;background:#fff;border-radius:7px;font-size:11px;font-family:monospace;word-break:break-all;border:0.5px solid #e8e8e5;margin-top:8px}
+pre{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.7}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}.row{flex-direction:column}}
 </style>
 </head>
 <body>
 <div class="app">
-  <div id="toast" class="toast"></div>
+<div id="toast" class="toast"></div>
 
-  <div class="header">
-    <h1>Sub-V MOR Outreach CRM</h1>
-    <div class="meta">
-      <span id="meta-contacts">0 contacts</span>
-      <span id="meta-hot" class="hot" style="display:none"></span>
-      <span id="meta-won">0 won · Est. MRR $0</span>
-      <span id="meta-lastrun"></span>
+<h1>Sub-V MOR Outreach CRM</h1>
+<div class="meta">
+  <span id="m-contacts">0 contacts</span>
+  <span id="m-hot" class="hot" style="display:none"></span>
+  <span id="m-won">0 won · Est. MRR $0</span>
+  <span id="m-run"></span>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab(0)">🔍 Daily Search</button>
+  <button class="tab" onclick="showTab(1)">📋 Contacts</button>
+  <button class="tab" onclick="showTab(2)">✉️ Outreach</button>
+  <button class="tab" onclick="showTab(3)">📊 Pipeline</button>
+  <button class="tab" onclick="showTab(4)">⚙️ Settings</button>
+</div>
+
+<!-- SEARCH -->
+<div id="tab-0">
+  <div class="section">
+    <div style="font-size:13px;font-weight:500;margin-bottom:10px">Search New Sub-V Filings</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="setToday()">Today</button>
+      <button class="btn btn-outline btn-sm" onclick="setYesterday()">Yesterday</button>
+      <button class="btn btn-outline btn-sm" onclick="setLast7()">Last 7 days</button>
     </div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab active" onclick="showTab(0)">🔍 Daily Search</button>
-    <button class="tab" onclick="showTab(1)">📋 Contacts</button>
-    <button class="tab" onclick="showTab(2)">✉️ Outreach</button>
-    <button class="tab" onclick="showTab(3)">📊 Pipeline</button>
-    <button class="tab" onclick="showTab(4)">⚙️ Settings</button>
-  </div>
-
-  <!-- SEARCH TAB -->
-  <div id="tab-0">
-    <div class="section">
-      <div style="font-size:13px;font-weight:500;margin-bottom:10px">Search New Sub-V Filings</div>
-      <div class="shortcuts">
-        <button class="btn btn-outline btn-small" onclick="setToday()">Today</button>
-        <button class="btn btn-outline btn-small" onclick="setYesterday()">Yesterday</button>
-        <button class="btn btn-outline btn-small" onclick="setLast7()">Last 7 days</button>
+    <div class="grid2">
+      <div><label>From date</label><input type="date" id="dateFrom"/></div>
+      <div><label>To date</label><input type="date" id="dateTo"/></div>
+      <div class="span2">
+        <label>Keyword</label>
+        <input type="text" id="keyword" value="subchapter v"/>
+        <div style="font-size:11px;color:#aaa;margin-top:3px">Default: "subchapter v" — also try "small business debtor" or a company/attorney name</div>
       </div>
-      <div class="grid2">
-        <div><label>From date</label><input type="date" id="dateFrom"/></div>
-        <div><label>To date</label><input type="date" id="dateTo"/></div>
-        <div class="span2">
-          <label>Keyword</label>
-          <input type="text" id="keyword" value="subchapter v"/>
-          <div style="font-size:11px;color:#aaa;margin-top:3px">Default: "subchapter v" — also try "small business debtor" or a company/attorney name</div>
-        </div>
-        <div class="span2">
-          <label>District</label>
-          <select id="district"></select>
-        </div>
-      </div>
-      <button class="btn btn-primary btn-full" id="searchBtn" onclick="doSearch()" style="margin-top:10px">🔍 Search Today's Filings</button>
-      <div id="debug-url" class="debug-url" style="display:none"></div>
+      <div class="span2"><label>District</label><select id="district"></select></div>
     </div>
-    <div id="search-msg" style="display:none"></div>
-    <div id="search-results"></div>
+    <button class="btn btn-primary btn-full" id="searchBtn" onclick="doSearch()" style="margin-top:10px">🔍 Search Today's Filings</button>
+    <div id="debug-url" class="debug" style="display:none"></div>
   </div>
+  <div id="search-msg" style="display:none"></div>
+  <div id="search-results"></div>
+</div>
 
-  <!-- CONTACTS TAB -->
-  <div id="tab-1" style="display:none">
-    <div style="display:flex;gap:7px;margin-bottom:12px;flex-wrap:wrap">
-      <input type="text" id="filterQ" placeholder="Search name, firm, debtor, case #…" oninput="renderContacts()" style="flex:1 1 180px"/>
-      <select id="filterStatus" onchange="renderContacts()" style="width:auto;flex:0 0 160px">
-        <option>All</option>
-        <option>New Lead</option><option>Outreach Sent</option><option>Responded</option>
-        <option>Demo Scheduled</option><option>Demo Done</option><option>Proposal Sent</option>
-        <option>Closed Won</option><option>Closed Lost</option><option>No Response</option>
-      </select>
+<!-- CONTACTS -->
+<div id="tab-1" style="display:none">
+  <div style="display:flex;gap:7px;margin-bottom:12px;flex-wrap:wrap">
+    <input type="text" id="filterQ" placeholder="Search name, firm, debtor, case #…" oninput="renderContacts()" style="flex:1 1 180px"/>
+    <select id="filterStatus" onchange="renderContacts()" style="width:auto;flex:0 0 160px">
+      <option>All</option>
+      <option>New Lead</option><option>Outreach Sent</option><option>Responded</option>
+      <option>Demo Scheduled</option><option>Demo Done</option><option>Proposal Sent</option>
+      <option>Closed Won</option><option>Closed Lost</option><option>No Response</option>
+    </select>
+  </div>
+  <div id="contacts-list"></div>
+</div>
+
+<!-- OUTREACH -->
+<div id="tab-2" style="display:none"><div id="outreach-content"></div></div>
+
+<!-- PIPELINE -->
+<div id="tab-3" style="display:none">
+  <div class="pipeline-grid" id="pipeline-grid"></div>
+  <div class="section">
+    <div style="font-size:12px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Revenue Summary</div>
+    <div id="pipeline-summary"></div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div id="tab-4" style="display:none">
+  <div style="max-width:460px">
+    <div style="font-size:13px;font-weight:500;margin-bottom:8px">Your Profile</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">
+      <div><label>Your name</label><input type="text" id="yourName" placeholder="Your name"/></div>
+      <div><label>Your phone</label><input type="text" id="yourPhone" placeholder="Your phone"/></div>
+      <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
     </div>
-    <div id="contacts-list"></div>
-  </div>
-
-  <!-- OUTREACH TAB -->
-  <div id="tab-2" style="display:none">
-    <div id="outreach-content"></div>
-  </div>
-
-  <!-- PIPELINE TAB -->
-  <div id="tab-3" style="display:none">
-    <div class="pipeline-grid" id="pipeline-grid"></div>
-    <div class="section">
-      <div style="font-size:12px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Revenue Summary</div>
-      <div id="pipeline-summary"></div>
-    </div>
-  </div>
-
-  <!-- SETTINGS TAB -->
-  <div id="tab-4" style="display:none">
-    <div style="max-width:480px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">Your Profile</div>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
-        <div><label>Your name</label><input type="text" id="yourName" placeholder="Your name"/></div>
-        <div><label>Your phone</label><input type="text" id="yourPhone" placeholder="Your phone"/></div>
-        <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
-      </div>
-      <div class="section" style="font-size:12px;color:#888780;line-height:1.8">
-        <div style="font-weight:500;color:#1a1a18;margin-bottom:6px">Daily workflow</div>
-        <div>1. Click <strong>Yesterday</strong> shortcut each morning</div>
-        <div>2. Hit <strong>Search Today's Filings</strong></div>
-        <div>3. Add new cases → click <strong>✉️ Outreach</strong></div>
-        <div>4. Send email or SMS within 21 days of filing</div>
-        <div>5. Mark <strong>Outreach Sent</strong> → track in Pipeline</div>
-        <div style="margin-top:8px;padding:8px 10px;background:#E6F1FB;border-radius:7px;color:#0C447C">
-          <strong>Tip:</strong> CourtListener has a 24–48hr lag. Search "Yesterday" each morning for best results.
-        </div>
+    <div class="section" style="font-size:12px;color:#888780;line-height:1.8">
+      <div style="font-weight:500;color:#1a1a18;margin-bottom:6px">Daily workflow</div>
+      <div>1. Click <strong>Yesterday</strong> each morning</div>
+      <div>2. Hit <strong>Search Today's Filings</strong></div>
+      <div>3. Click <strong>🔍 Enrich</strong> to get phone, email, attorney, trustee</div>
+      <div>4. Click <strong>✉️ Outreach</strong> to send email or SMS</div>
+      <div>5. Mark <strong>Outreach Sent</strong> → track in Pipeline</div>
+      <div style="margin-top:8px;padding:8px 10px;background:#E6F1FB;border-radius:7px;color:#0C447C">
+        <strong>Tip:</strong> CourtListener has a 24–48hr lag. Search "Yesterday" each morning.
       </div>
     </div>
   </div>
 </div>
+</div>
 
 <script>
-// ── HELPERS (defined first to avoid initialization errors) ──
-function uid()       { return Math.random().toString(36).slice(2,9); }
-function fmt$(v)     { return "$" + Number(v||0).toLocaleString(); }
-function isoToday()  { return new Date().toISOString().slice(0,10); }
+// ── HELPERS ──
+function uid()          { return Math.random().toString(36).slice(2,9); }
+function fmt$(v)        { return "$"+Number(v||0).toLocaleString(); }
+function isoToday()     { return new Date().toISOString().slice(0,10); }
 function isoYesterday() { var d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
 function isoLast7()     { var d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); }
-function daysSince(d)   { return d ? Math.floor((Date.now()-new Date(d))/86400000) : null; }
-function setToday()     { document.getElementById("dateFrom").value=isoToday(); document.getElementById("dateTo").value=isoToday(); }
+function daysSince(d)   { return d?Math.floor((Date.now()-new Date(d))/86400000):null; }
+function setToday()     { var d=isoToday(); document.getElementById("dateFrom").value=d; document.getElementById("dateTo").value=d; }
 function setYesterday() { var d=isoYesterday(); document.getElementById("dateFrom").value=d; document.getElementById("dateTo").value=d; }
 function setLast7()     { document.getElementById("dateFrom").value=isoLast7(); document.getElementById("dateTo").value=isoToday(); }
+function esc(s)         { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
-function urgencyLabel(filed) {
-  var d = daysSince(filed);
+function urgLabel(filed) {
+  var d=daysSince(filed);
   if (d===null) return null;
-  if (d<=3)  return {label:"🔥 Day "+d+" — Act now",color:"#c0392b"};
-  if (d<=10) return {label:"⚡ Day "+d+" — Hot lead",color:"#d35400"};
-  if (d<=21) return {label:"✅ Day "+d+" — In window",color:"#1D9E75"};
-  if (d<=45) return {label:"📋 Day "+d+" — Active",color:"#185FA5"};
-  return {label:"📁 Day "+d,color:"#888780"};
+  if (d<=3)  return {t:"🔥 Day "+d+" — Act now",c:"#c0392b"};
+  if (d<=10) return {t:"⚡ Day "+d+" — Hot lead",c:"#d35400"};
+  if (d<=21) return {t:"✅ Day "+d+" — In window",c:"#1D9E75"};
+  if (d<=45) return {t:"📋 Day "+d+" — Active",c:"#185FA5"};
+  return {t:"📁 Day "+d,c:"#888780"};
 }
 
-function showToast(msg) {
+function showToast(m) {
   var t=document.getElementById("toast");
-  t.textContent=msg; t.style.display="block";
-  setTimeout(function(){ t.style.display="none"; },3000);
+  t.textContent=m; t.style.display="block";
+  setTimeout(function(){ t.style.display="none"; },3500);
 }
 
-function showMsg(el, text, type) {
-  el.className="msg msg-"+type;
-  el.textContent=text;
-  el.style.display="block";
+function showMsg(el,text,type) {
+  el.className="msg msg-"+type; el.textContent=text; el.style.display="block";
 }
 
-function badgeHtml(status) {
-  var colors = {
-    "New Lead":       {bg:"#E6F1FB",color:"#0C447C"},
-    "Outreach Sent":  {bg:"#FAEEDA",color:"#633806"},
-    "Responded":      {bg:"#FDE8F0",color:"#7A1535"},
-    "Demo Scheduled": {bg:"#EEEDFE",color:"#3C3489"},
-    "Demo Done":      {bg:"#E1F5EE",color:"#085041"},
-    "Proposal Sent":  {bg:"#EAF3DE",color:"#1A6608"},
-    "Closed Won":     {bg:"#EAF3DE",color:"#27500A"},
-    "Closed Lost":    {bg:"#F3F3F2",color:"#505050"},
-    "No Response":    {bg:"#F3F3F2",color:"#888780"}
-  };
-  var s = colors[status]||{bg:"#eee",color:"#333"};
-  return '<span class="badge" style="background:'+s.bg+';color:'+s.color+'">'+status+'</span>';
-}
+var SC = {
+  "New Lead":       {bg:"#E6F1FB",c:"#0C447C"},
+  "Outreach Sent":  {bg:"#FAEEDA",c:"#633806"},
+  "Responded":      {bg:"#FDE8F0",c:"#7A1535"},
+  "Demo Scheduled": {bg:"#EEEDFE",c:"#3C3489"},
+  "Demo Done":      {bg:"#E1F5EE",c:"#085041"},
+  "Proposal Sent":  {bg:"#EAF3DE",c:"#1A6608"},
+  "Closed Won":     {bg:"#EAF3DE",c:"#27500A"},
+  "Closed Lost":    {bg:"#F3F3F2",c:"#505050"},
+  "No Response":    {bg:"#F3F3F2",c:"#888780"}
+};
+var SL = ["New Lead","Outreach Sent","Responded","Demo Scheduled","Demo Done","Proposal Sent","Closed Won","Closed Lost","No Response"];
 
-// ── STATE ──
-var contacts   = JSON.parse(localStorage.getItem("bi-crm-contacts")||"[]");
-var yourName   = localStorage.getItem("bi-name")||"";
-var yourPhone  = localStorage.getItem("bi-phone")||"";
-var lastRun    = localStorage.getItem("bi-lastrun")||"";
-var outreachContact = null;
-var currentTmpl = "attorney_email";
-var _searchResults = [];
-
-var STATUS_COLORS = {
-  "New Lead":       {bg:"#E6F1FB",color:"#0C447C"},
-  "Outreach Sent":  {bg:"#FAEEDA",color:"#633806"},
-  "Responded":      {bg:"#FDE8F0",color:"#7A1535"},
-  "Demo Scheduled": {bg:"#EEEDFE",color:"#3C3489"},
-  "Demo Done":      {bg:"#E1F5EE",color:"#085041"},
-  "Proposal Sent":  {bg:"#EAF3DE",color:"#1A6608"},
-  "Closed Won":     {bg:"#EAF3DE",color:"#27500A"},
-  "Closed Lost":    {bg:"#F3F3F2",color:"#505050"},
-  "No Response":    {bg:"#F3F3F2",color:"#888780"}
+var TMPLS = {
+  attorney_email:{label:"Attorney — Email",subject:"Automating the 425C for [DEBTOR] — saves 3+ hours/month",
+    body:"Hi [NAME],\n\nI noticed [DEBTOR] just filed a Subchapter V case (Case No. [CASE_NO]) in the [DISTRICT]. Congratulations on the new engagement.\n\nWe built a tool specifically for the 425C Monthly Operating Report — connecting directly to QuickBooks Online, pulling the financial data automatically, and populating the 425C in about 20 minutes — replacing 3–5 hours of manual work per report.\n\nWould you be open to a 15-minute demo this week?\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"},
+  attorney_sms:{label:"Attorney — SMS",body:"Hi [NAME], saw [DEBTOR] just filed Sub-V (Case [CASE_NO]). We built a QBO tool that auto-fills the 425C in 20 min — replaces 3-5 hrs/month. Worth a quick call? — [YOUR_NAME], Bookkeeping Innovations"},
+  debtor_email:{label:"Debtor/Owner — Email",subject:"Your monthly 425C report — we can automate this",
+    body:"Hi [NAME],\n\nI'm reaching out because [DEBTOR] recently filed under Subchapter V (Case No. [CASE_NO]).\n\nYou're required to file a Monthly Operating Report (Form 425C) by the 21st of every month. We built a tool that connects to your QuickBooks Online and generates this report automatically in about 20 minutes.\n\nI'd love to show you how it works — free 15-minute demo?\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"},
+  debtor_sms:{label:"Debtor/Owner — SMS",body:"Hi [NAME] — your Sub-V case requires a 425C MOR due by the 21st each month. We automate it from QBO in 20 min. Free demo? — [YOUR_NAME], Bookkeeping Innovations"}
 };
 
-var STATUS_LIST = ["New Lead","Outreach Sent","Responded","Demo Scheduled","Demo Done","Proposal Sent","Closed Won","Closed Lost","No Response"];
-
-var TEMPLATES = {
-  attorney_email: {
-    label:"Attorney — Email",
-    subject:"Automating the 425C for [DEBTOR] — saves 3+ hours/month",
-    body:"Hi [NAME],\n\nI noticed [DEBTOR] just filed a Subchapter V case (Case No. [CASE_NO]) in the [DISTRICT]. Congratulations on the new engagement.\n\nWe built a tool specifically for the 425C Monthly Operating Report — the one your team needs to file by the 21st of every month starting now. It connects directly to QuickBooks Online, pulls the financial data automatically, and populates the 425C in about 20 minutes — replacing 3–5 hours of manual work per report.\n\nWould you be open to a 15-minute demo this week?\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"
-  },
-  attorney_sms: {
-    label:"Attorney — SMS",
-    body:"Hi [NAME], saw [DEBTOR] just filed Sub-V (Case [CASE_NO]). We built a QBO-integrated tool that auto-fills the 425C in 20 min — replaces 3-5 hrs/month. Worth a quick call? — [YOUR_NAME], Bookkeeping Innovations"
-  },
-  debtor_email: {
-    label:"Debtor/Owner — Email",
-    subject:"Your monthly 425C report — we can automate this",
-    body:"Hi [NAME],\n\nI'm reaching out because [DEBTOR] recently filed under Subchapter V (Case No. [CASE_NO]).\n\nAs part of your case, you're required to file a Monthly Operating Report (Form 425C) by the 21st of every month. We built a tool that connects to your QuickBooks Online and generates this report automatically in about 20 minutes.\n\nGiven your first report is due soon, I'd love to show you how it works in a free 15-minute demo.\n\nBest,\n[YOUR_NAME]\nBookkeeping Innovations\n[YOUR_PHONE]"
-  },
-  debtor_sms: {
-    label:"Debtor/Owner — SMS",
-    body:"Hi [NAME] — your Sub-V case requires a 425C MOR due by the 21st each month. We automate it from QBO in 20 min. Free demo? — [YOUR_NAME], Bookkeeping Innovations"
-  }
-};
-
-var ALL_DISTRICTS = [
-  {label:"All Districts",value:"all"},
-  {label:"Middle District of Alabama",value:"almb"},{label:"Northern District of Alabama",value:"alnb"},{label:"Southern District of Alabama",value:"alsb"},
-  {label:"District of Alaska",value:"akb"},{label:"District of Arizona",value:"arb"},{label:"Eastern District of Arkansas",value:"areb"},{label:"Western District of Arkansas",value:"arwb"},
-  {label:"Central District of California",value:"cacb"},{label:"Eastern District of California",value:"caeb"},{label:"Northern District of California",value:"canb"},{label:"Southern District of California",value:"casb"},
-  {label:"District of Colorado",value:"cob"},{label:"District of Connecticut",value:"ctb"},{label:"District of Delaware",value:"deb"},{label:"District of Columbia",value:"dcb"},
-  {label:"Middle District of Florida",value:"flmb"},{label:"Northern District of Florida",value:"flnb"},{label:"Southern District of Florida",value:"flsb"},
-  {label:"Middle District of Georgia",value:"gamb"},{label:"Northern District of Georgia",value:"ganb"},{label:"Southern District of Georgia",value:"gasb"},
-  {label:"District of Hawaii",value:"hib"},{label:"District of Idaho",value:"idb"},
-  {label:"Central District of Illinois",value:"ilcb"},{label:"Northern District of Illinois",value:"ilnb"},{label:"Southern District of Illinois",value:"ilsb"},
-  {label:"Northern District of Indiana",value:"innb"},{label:"Southern District of Indiana",value:"insb"},
-  {label:"District of Kansas",value:"ksb"},{label:"Eastern District of Kentucky",value:"kyeb"},{label:"Western District of Kentucky",value:"kywb"},
-  {label:"Eastern District of Louisiana",value:"laeb"},{label:"Middle District of Louisiana",value:"lamb"},{label:"Western District of Louisiana",value:"lawb"},
-  {label:"District of Maine",value:"meb"},{label:"District of Maryland",value:"mdb"},{label:"District of Massachusetts",value:"mab"},
-  {label:"Eastern District of Michigan",value:"mieb"},{label:"Western District of Michigan",value:"miwb"},
-  {label:"District of Minnesota",value:"mnb"},{label:"Northern District of Mississippi",value:"msnb"},{label:"Southern District of Mississippi",value:"mssb"},
-  {label:"Eastern District of Missouri",value:"moeb"},{label:"Western District of Missouri",value:"mowb"},
-  {label:"District of Montana",value:"mtb"},{label:"District of Nebraska",value:"nebraskab"},{label:"District of Nevada",value:"nvb"},{label:"District of New Hampshire",value:"nhb"},
-  {label:"District of New Jersey",value:"njb"},{label:"District of New Mexico",value:"nmb"},
-  {label:"Eastern District of New York",value:"nyeb"},{label:"Northern District of New York",value:"nynb"},{label:"Southern District of New York",value:"nysb"},{label:"Western District of New York",value:"nywb"},
-  {label:"Eastern District of North Carolina",value:"nceb"},{label:"Middle District of North Carolina",value:"ncmb"},{label:"Western District of North Carolina",value:"ncwb"},
-  {label:"District of North Dakota",value:"ndb"},{label:"Northern District of Ohio",value:"ohnb"},{label:"Southern District of Ohio",value:"ohsb"},
-  {label:"Eastern District of Oklahoma",value:"okeb"},{label:"Northern District of Oklahoma",value:"oknb"},{label:"Western District of Oklahoma",value:"okwb"},
-  {label:"District of Oregon",value:"orb"},
-  {label:"Eastern District of Pennsylvania",value:"paeb"},{label:"Middle District of Pennsylvania",value:"pamb"},{label:"Western District of Pennsylvania",value:"pawb"},
-  {label:"District of Puerto Rico",value:"prb"},{label:"District of Rhode Island",value:"rib"},{label:"District of South Carolina",value:"scb"},{label:"District of South Dakota",value:"sdb"},
-  {label:"Eastern District of Tennessee",value:"tneb"},{label:"Middle District of Tennessee",value:"tnmb"},{label:"Western District of Tennessee",value:"tnwb"},
-  {label:"Eastern District of Texas",value:"txeb"},{label:"Northern District of Texas",value:"txnb"},{label:"Southern District of Texas",value:"txsb"},{label:"Western District of Texas",value:"txwb"},
-  {label:"District of Utah",value:"utb"},{label:"District of Vermont",value:"vtb"},
-  {label:"Eastern District of Virginia",value:"vaeb"},{label:"Western District of Virginia",value:"vawb"},
-  {label:"Eastern District of Washington",value:"waeb"},{label:"Western District of Washington",value:"wawb"},
-  {label:"Northern District of West Virginia",value:"wvnb"},{label:"Southern District of West Virginia",value:"wvsb"},
-  {label:"Eastern District of Wisconsin",value:"wieb"},{label:"Western District of Wisconsin",value:"wiwb"},
-  {label:"District of Wyoming",value:"wyb"}
+var ALL_DISTRICTS=[
+  {l:"All Districts",v:"all"},
+  {l:"Middle District of Alabama",v:"almb"},{l:"Northern District of Alabama",v:"alnb"},{l:"Southern District of Alabama",v:"alsb"},
+  {l:"District of Alaska",v:"akb"},{l:"District of Arizona",v:"arb"},{l:"Eastern District of Arkansas",v:"areb"},{l:"Western District of Arkansas",v:"arwb"},
+  {l:"Central District of California",v:"cacb"},{l:"Eastern District of California",v:"caeb"},{l:"Northern District of California",v:"canb"},{l:"Southern District of California",v:"casb"},
+  {l:"District of Colorado",v:"cob"},{l:"District of Connecticut",v:"ctb"},{l:"District of Delaware",v:"deb"},{l:"District of Columbia",v:"dcb"},
+  {l:"Middle District of Florida",v:"flmb"},{l:"Northern District of Florida",v:"flnb"},{l:"Southern District of Florida",v:"flsb"},
+  {l:"Middle District of Georgia",v:"gamb"},{l:"Northern District of Georgia",v:"ganb"},{l:"Southern District of Georgia",v:"gasb"},
+  {l:"District of Hawaii",v:"hib"},{l:"District of Idaho",v:"idb"},
+  {l:"Central District of Illinois",v:"ilcb"},{l:"Northern District of Illinois",v:"ilnb"},{l:"Southern District of Illinois",v:"ilsb"},
+  {l:"Northern District of Indiana",v:"innb"},{l:"Southern District of Indiana",v:"insb"},
+  {l:"District of Kansas",v:"ksb"},{l:"Eastern District of Kentucky",v:"kyeb"},{l:"Western District of Kentucky",v:"kywb"},
+  {l:"Eastern District of Louisiana",v:"laeb"},{l:"Middle District of Louisiana",v:"lamb"},{l:"Western District of Louisiana",v:"lawb"},
+  {l:"District of Maine",v:"meb"},{l:"District of Maryland",v:"mdb"},{l:"District of Massachusetts",v:"mab"},
+  {l:"Eastern District of Michigan",v:"mieb"},{l:"Western District of Michigan",v:"miwb"},
+  {l:"District of Minnesota",v:"mnb"},{l:"Northern District of Mississippi",v:"msnb"},{l:"Southern District of Mississippi",v:"mssb"},
+  {l:"Eastern District of Missouri",v:"moeb"},{l:"Western District of Missouri",v:"mowb"},
+  {l:"District of Montana",v:"mtb"},{l:"District of Nebraska",v:"nebraskab"},{l:"District of Nevada",v:"nvb"},{l:"District of New Hampshire",v:"nhb"},
+  {l:"District of New Jersey",v:"njb"},{l:"District of New Mexico",v:"nmb"},
+  {l:"Eastern District of New York",v:"nyeb"},{l:"Northern District of New York",v:"nynb"},{l:"Southern District of New York",v:"nysb"},{l:"Western District of New York",v:"nywb"},
+  {l:"Eastern District of North Carolina",v:"nceb"},{l:"Middle District of North Carolina",v:"ncmb"},{l:"Western District of North Carolina",v:"ncwb"},
+  {l:"District of North Dakota",v:"ndb"},{l:"Northern District of Ohio",v:"ohnb"},{l:"Southern District of Ohio",v:"ohsb"},
+  {l:"Eastern District of Oklahoma",v:"okeb"},{l:"Northern District of Oklahoma",v:"oknb"},{l:"Western District of Oklahoma",v:"okwb"},
+  {l:"District of Oregon",v:"orb"},
+  {l:"Eastern District of Pennsylvania",v:"paeb"},{l:"Middle District of Pennsylvania",v:"pamb"},{l:"Western District of Pennsylvania",v:"pawb"},
+  {l:"District of Puerto Rico",v:"prb"},{l:"District of Rhode Island",v:"rib"},{l:"District of South Carolina",v:"scb"},{l:"District of South Dakota",v:"sdb"},
+  {l:"Eastern District of Tennessee",v:"tneb"},{l:"Middle District of Tennessee",v:"tnmb"},{l:"Western District of Tennessee",v:"tnwb"},
+  {l:"Eastern District of Texas",v:"txeb"},{l:"Northern District of Texas",v:"txnb"},{l:"Southern District of Texas",v:"txsb"},{l:"Western District of Texas",v:"txwb"},
+  {l:"District of Utah",v:"utb"},{l:"District of Vermont",v:"vtb"},
+  {l:"Eastern District of Virginia",v:"vaeb"},{l:"Western District of Virginia",v:"vawb"},
+  {l:"Eastern District of Washington",v:"waeb"},{l:"Western District of Washington",v:"wawb"},
+  {l:"Northern District of West Virginia",v:"wvnb"},{l:"Southern District of West Virginia",v:"wvsb"},
+  {l:"Eastern District of Wisconsin",v:"wieb"},{l:"Western District of Wisconsin",v:"wiwb"},
+  {l:"District of Wyoming",v:"wyb"}
 ];
 
+// ── STATE ──
+var contacts  = JSON.parse(localStorage.getItem("bi-crm-v2")||"[]");
+var yourName  = localStorage.getItem("bi-name")||"";
+var yourPhone = localStorage.getItem("bi-phone")||"";
+var lastRun   = localStorage.getItem("bi-lastrun")||"";
+var outreachC = null;
+var curTmpl   = "attorney_email";
+var SR        = []; // search results
+
 // ── INIT ──
-(function init() {
-  var sel = document.getElementById("district");
-  ALL_DISTRICTS.forEach(function(d) {
-    var o = document.createElement("option");
-    o.value = d.value; o.textContent = d.label; sel.appendChild(o);
+(function(){
+  var sel=document.getElementById("district");
+  ALL_DISTRICTS.forEach(function(d){
+    var o=document.createElement("option"); o.value=d.v; o.textContent=d.l; sel.appendChild(o);
   });
-  document.getElementById("yourName").value  = yourName;
-  document.getElementById("yourPhone").value = yourPhone;
-  if (lastRun) document.getElementById("meta-lastrun").textContent = "Last search: "+lastRun;
+  document.getElementById("yourName").value=yourName;
+  document.getElementById("yourPhone").value=yourPhone;
+  if (lastRun) document.getElementById("m-run").textContent="Last search: "+lastRun;
   setYesterday();
   updateMeta();
-  renderOutreachTemplates();
+  renderTmplList();
 })();
 
-// ── META ──
-function updateMeta() {
-  var won  = contacts.filter(function(c){ return c.status==="Closed Won"; }).length;
-  var hot  = contacts.filter(function(c){ var d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
-  var hotEl= document.getElementById("meta-hot");
-  document.getElementById("meta-contacts").textContent = contacts.length+" contacts";
-  document.getElementById("meta-won").textContent = won+" won · Est. MRR "+fmt$(won*200);
-  if (hot>0){ hotEl.textContent="⚡ "+hot+" in 21-day window"; hotEl.style.display="inline"; }
-  else hotEl.style.display="none";
+function updateMeta(){
+  var won=contacts.filter(function(c){return c.status==="Closed Won";}).length;
+  var hot=contacts.filter(function(c){var d=daysSince(c.filed);return d!==null&&d<=21&&c.status==="New Lead";}).length;
+  document.getElementById("m-contacts").textContent=contacts.length+" contacts";
+  document.getElementById("m-won").textContent=won+" won · Est. MRR "+fmt$(won*200);
+  var hel=document.getElementById("m-hot");
+  if(hot>0){hel.textContent="⚡ "+hot+" in 21-day window";hel.style.display="inline";}
+  else hel.style.display="none";
 }
 
-function saveContacts() {
-  localStorage.setItem("bi-crm-contacts", JSON.stringify(contacts));
-  updateMeta();
-}
+function saveContacts(){ localStorage.setItem("bi-crm-v2",JSON.stringify(contacts)); updateMeta(); }
 
 // ── TABS ──
-function showTab(n) {
-  for (var i=0;i<5;i++) {
-    document.getElementById("tab-"+i).style.display = i===n?"block":"none";
-    document.querySelectorAll(".tab")[i].classList.toggle("active", i===n);
+function showTab(n){
+  for(var i=0;i<5;i++){
+    document.getElementById("tab-"+i).style.display=i===n?"block":"none";
+    document.querySelectorAll(".tab")[i].classList.toggle("active",i===n);
   }
-  if (n===1) renderContacts();
-  if (n===3) renderPipeline();
+  if(n===1) renderContacts();
+  if(n===3) renderPipeline();
 }
 
-// ── NAME EXTRACTION ──
-function extractNameFromUrl(url) {
-  if (!url) return "(Unknown)";
-  var parts = url.split("/").filter(Boolean);
-  var slug  = parts[parts.length-1]||parts[parts.length-2]||"";
-  return slug.replace(/-/g," ").replace(/\b\w/g,function(c){ return c.toUpperCase(); });
+// ── NAME ──
+function nameFromUrl(url){
+  if(!url) return "(Unknown)";
+  var p=url.split("/").filter(Boolean);
+  return (p[p.length-1]||p[p.length-2]||"").replace(/-/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});
 }
-
-function extractNameFromResult(r) {
-  if (r.caseName && r.caseName.length>0) return r.caseName;
-  if (r.rawPreview) {
-    var m = r.rawPreview.match(/[Ff]iled by ([^.(]+)/);
-    if (m) return m[1].trim();
-    var m2 = r.rawPreview.match(/on behalf of ([^(]+)/);
-    if (m2) return m2[1].trim();
+function nameFromResult(r){
+  if(r.caseName&&r.caseName.length>0) return r.caseName;
+  if(r.rawPreview){
+    var m=r.rawPreview.match(/[Ff]iled by ([^.(]+)/); if(m) return m[1].trim();
+    var m2=r.rawPreview.match(/on behalf of ([^(]+)/); if(m2) return m2[1].trim();
   }
-  return extractNameFromUrl(r.absoluteUrl);
+  return nameFromUrl(r.absoluteUrl);
 }
 
 // ── SEARCH ──
-function doSearch() {
-  var btn       = document.getElementById("searchBtn");
-  var msgEl     = document.getElementById("search-msg");
-  var resultsEl = document.getElementById("search-results");
-  var debugEl   = document.getElementById("debug-url");
-  var from      = document.getElementById("dateFrom").value;
-  var to        = document.getElementById("dateTo").value;
-  var court     = document.getElementById("district").value;
-  var keyword   = document.getElementById("keyword").value||"subchapter v";
-  var dateLabel = from===to?"filed on "+from:"filed between "+from+" and "+to;
+function doSearch(){
+  var btn=document.getElementById("searchBtn");
+  var msgEl=document.getElementById("search-msg");
+  var resEl=document.getElementById("search-results");
+  var dbgEl=document.getElementById("debug-url");
+  var from=document.getElementById("dateFrom").value;
+  var to=document.getElementById("dateTo").value;
+  var court=document.getElementById("district").value;
+  var kw=document.getElementById("keyword").value||"subchapter v";
+  var label=from===to?"filed on "+from:"filed between "+from+" and "+to;
 
   btn.disabled=true; btn.textContent="🔍 Searching…";
-  msgEl.style.display="none"; resultsEl.innerHTML=""; debugEl.style.display="none";
+  msgEl.style.display="none"; resEl.innerHTML=""; dbgEl.style.display="none";
 
-  var params = "dateFrom="+from+"&dateTo="+to+"&court="+court+"&q="+encodeURIComponent(keyword)+"&maxPages=3";
-  var fullUrl = "/search?"+params;
-  debugEl.innerHTML = '<span style="color:#888">Request: </span><a href="'+fullUrl+'" target="_blank">'+window.location.origin+fullUrl+'</a>';
-  debugEl.style.display="block";
+  var params="dateFrom="+from+"&dateTo="+to+"&court="+court+"&q="+encodeURIComponent(kw)+"&maxPages=3";
+  var url="/search?"+params;
+  dbgEl.innerHTML='<span style="color:#888">Request: </span><a href="'+url+'" target="_blank">'+window.location.origin+url+'</a>';
+  dbgEl.style.display="block";
 
-  fetch(fullUrl)
-    .then(function(resp){ return resp.json().then(function(data){ return {ok:resp.ok,data:data}; }); })
-    .then(function(res) {
-      if (!res.ok) throw new Error(res.data.error||"Server error");
-      var raw = (res.data.results||[]).filter(function(r){
+  fetch(url)
+    .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})
+    .then(function(res){
+      if(!res.ok) throw new Error(res.d.error||"Server error");
+      var raw=(res.d.results||[]).filter(function(r){
         return r.searchType==="docket-subv"||r.searchType==="recap-subv"||(r.caseName&&r.caseName.length>0);
       });
-      if (raw.length===0) {
-        showMsg(msgEl,"No cases found "+dateLabel+". CourtListener has a 24–48hr lag — try 'Last 7 days'.","warn");
+      SR=raw;
+      if(!raw.length){
+        showMsg(msgEl,"No cases found "+label+". CourtListener has a 24–48hr lag — try 'Last 7 days'.","warn");
       } else {
-        showMsg(msgEl,"✓ "+raw.length+" cases found "+dateLabel+". Click 'View on CourtListener →' to confirm Sub-V status.","ok");
-        renderResults(raw, resultsEl);
+        showMsg(msgEl,"✓ "+raw.length+" cases found "+label+". Click 'View on CourtListener →' to confirm Sub-V status.","ok");
+        renderResults(raw,resEl);
       }
-      lastRun = new Date().toLocaleString();
-      localStorage.setItem("bi-lastrun", lastRun);
-      document.getElementById("meta-lastrun").textContent = "Last search: "+lastRun;
+      lastRun=new Date().toLocaleString();
+      localStorage.setItem("bi-lastrun",lastRun);
+      document.getElementById("m-run").textContent="Last search: "+lastRun;
     })
-    .catch(function(e){ showMsg(msgEl,"Search failed: "+e.message,"err"); })
-    .finally(function(){ btn.disabled=false; btn.textContent="🔍 Search Today's Filings"; });
+    .catch(function(e){showMsg(msgEl,"Search failed: "+e.message,"err");})
+    .finally(function(){btn.disabled=false;btn.textContent="🔍 Search Today's Filings";});
 }
 
-function renderResults(raw, el) {
-  _searchResults = raw;
-  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+function renderResults(raw,el){
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
     +'<div style="font-size:13px;font-weight:500">'+raw.length+' cases found</div>'
-    +'<button class="btn btn-green btn-small" onclick="addAll()">+ Add All</button></div>';
+    +'<button class="btn btn-green btn-sm" onclick="addAll()">+ Add All</button></div>';
+  raw.forEach(function(r,i){
+    var name=nameFromResult(r);
+    var urg=r.dateFiled?urgLabel(r.dateFiled):null;
 
-  raw.forEach(function(r, i) {
-    var name = extractNameFromResult(r);
-    var urg  = r.dateFiled ? urgencyLabel(r.dateFiled) : null;
-    var card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = '<div class="case-row">'
+    // Parse attorneys from rawPreview
+    var attorneys=[];
+    try{var rp=JSON.parse(r.rawPreview+'"dummy":1}'); attorneys=rp.attorney||[];}catch(e){}
+    // Also check top-level
+    if(!attorneys.length&&r.attorney) attorneys=[r.attorney];
+
+    var card=document.createElement("div");
+    card.className="card";
+    card.innerHTML=
+      '<div class="row">'
       +'<div style="flex:1;min-width:180px">'
-      +'<div class="case-title">'+name+'</div>'
-      +'<div class="case-meta">'+(r.docketNumber?"Case "+r.docketNumber+" · ":"")+(r.dateFiled?"Filed "+r.dateFiled+" · ":'')+'<span style="text-transform:uppercase">'+(r.courtId||"")+'</span></div>'
-      +(r.attorney?'<div style="font-size:12px;color:#888780;margin-top:2px">Attorney: '+r.attorney+'</div>':"")
-      +(urg?'<div class="urgency" style="color:'+urg.color+'">'+urg.label+'</div>':"")
-      +(r.absoluteUrl?'<a href="'+r.absoluteUrl+'" target="_blank" style="font-size:11px;display:block;margin-top:3px">View on CourtListener →</a>':"")
+        +'<div style="font-weight:700;font-size:14px">'+esc(name)+'</div>'
+        +'<div class="info-row">'
+          +(r.docketNumber?'<span>Case <strong>'+esc(r.docketNumber)+'</strong></span>':'')
+          +(r.dateFiled?'<span>Filed <strong>'+r.dateFiled+'</strong></span>':'')
+          +(r.courtId?'<span style="text-transform:uppercase"><strong>'+esc(r.courtId)+'</strong></span>':'')
+        +'</div>'
+        +(urg?'<div class="urg" style="color:'+urg.c+'">'+urg.t+'</div>':"")
+        // Attorney row
+        +(attorneys.length
+          ?'<div class="info-row" style="margin-top:5px"><span class="info-label">⚖️ Attorney:</span>'
+            +attorneys.slice(0,3).map(function(a){return'<span>'+esc(a)+'</span>';}).join(", ")+'</div>'
+          :'<div class="info-row" style="margin-top:5px;color:#aaa"><span class="info-label">⚖️ Attorney:</span> <span>Not yet in CourtListener — click Enrich</span></div>')
+        // Trustee placeholder
+        +'<div class="info-row"><span class="info-label">🏛️ Trustee:</span> <span style="color:#aaa">Click Enrich to fetch</span></div>'
+        // Principal placeholder
+        +'<div class="info-row"><span class="info-label">👤 Principal:</span> <span style="color:#aaa">Click Enrich to fetch from petition</span></div>'
+        +(r.absoluteUrl?'<a href="'+r.absoluteUrl+'" target="_blank" style="font-size:11px;display:block;margin-top:4px">View on CourtListener →</a>':"")
+        +'<div id="enrich-'+i+'" style="display:none"></div>'
       +'</div>'
-      +'<div class="case-actions">'
-      +'<button class="btn btn-small" style="background:#E6F1FB;color:#0C447C;border:none" onclick="addResult('+i+')">+ Add</button>'
-      +'<button class="btn btn-green btn-small" onclick="addAndOutreach('+i+')">✉️ Outreach</button>'
-      +'<button class="btn btn-small" style="background:#EEEDFE;color:#3C3489;border:none" onclick="enrichResult('+i+')">🔍 Enrich</button>'
-      +'</div></div>';
+      +'<div class="actions">'
+        +'<button class="btn btn-sm" style="background:#E6F1FB;color:#0C447C;border:none" onclick="addResult('+i+')">+ Add</button>'
+        +'<button class="btn btn-green btn-sm" onclick="addAndOutreach('+i+')">✉️ Outreach</button>'
+        +'<button class="btn btn-purple btn-sm" id="enrich-btn-'+i+'" onclick="enrichResult('+i+')">🔍 Enrich</button>'
+      +'</div>'
+      +'</div>';
     el.appendChild(card);
   });
 }
 
-function resultToContact(r) {
-  return {
-    id:uid(), debtor:extractNameFromResult(r),
-    caseNo:r.docketNumber||"", court:r.courtId||"",
-    filed:r.dateFiled||"", attorney:r.attorney||"",
-    name:"", firm:"", email:"", phone:"", district:r.courtId||"",
-    status:"New Lead", notes:"", contactType:"attorney",
-    url:r.absoluteUrl||"", clId:r.docketId, source:"CourtListener"
-  };
+// ── ADD ──
+function rToC(r){
+  return {id:uid(),debtor:nameFromResult(r),caseNo:r.docketNumber||"",court:r.courtId||"",
+    filed:r.dateFiled||"",attorney:r.attorney||(r.rawPreview&&JSON.parse(r.rawPreview+'"x":1}').attorney||[])[0]||"",
+    name:"",firm:"",email:"",phone:"",district:r.courtId||"",status:"New Lead",notes:"",
+    contactType:"attorney",url:r.absoluteUrl||"",clId:r.docketId,source:"CourtListener"};
 }
 
-function addResult(i) {
-  var r=_searchResults[i]; if(!r) return;
-  var c=resultToContact(r);
-  if (contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ showToast("Already in list."); return; }
+function addResult(i){
+  var r=SR[i]; if(!r) return;
+  var c=rToC(r);
+  if(contacts.find(function(x){return x.caseNo&&x.caseNo===c.caseNo;})){showToast("Already in list.");return;}
   contacts.push(c); saveContacts(); showToast("Added!");
 }
 
-function addAll() {
+function addAll(){
   var n=0;
-  _searchResults.forEach(function(r){
-    var c=resultToContact(r);
-    if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); n++; }
+  SR.forEach(function(r){
+    var c=rToC(r);
+    if(!contacts.find(function(x){return x.caseNo&&x.caseNo===c.caseNo;})){contacts.push(c);n++;}
   });
   saveContacts(); showToast("Added "+n+" contacts.");
 }
 
-function enrichResult(i) {
-  var r = _searchResults[i]; if (!r||!r.docketId) { alert("No docket ID available for this case."); return; }
-  var c = resultToContact(r);
-  if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); saveContacts(); }
-
-  // Show loading state
-  showToast("Enriching case — this takes 15–30 seconds…");
-
-  fetch("/cases/"+r.docketId+"/enrich")
-    .then(function(resp){ return resp.json(); })
-    .then(function(data) {
-      var e = data.enrichment;
-      var lines = [];
-
-      // Company
-      if (e.company) {
-        lines.push("🏢 COMPANY: " + (e.company.name||""));
-        if (e.company.phone)   lines.push("   📞 " + e.company.phone + " ("+e.company.source+")");
-        if (e.company.website) lines.push("   🌐 " + e.company.website);
-        if (e.company.address) lines.push("   📍 " + e.company.address);
-        if (e.company.mapsUrl) lines.push("   🗺️ " + e.company.mapsUrl);
-        (e.company.emails||[]).forEach(function(em){ lines.push("   📧 " + em + " (found on website)"); });
-        (e.company.scrapedPhones||[]).forEach(function(ph){ lines.push("   📞 " + ph + " (found on website)"); });
-      }
-
-      // Principal email guesses
-      (e.principals||[]).forEach(function(p){
-        if (p.name) {
-          lines.push("\n👤 PRINCIPAL: " + p.name + " ("+p.role+")");
-          (p.emailGuesses||[]).slice(0,3).forEach(function(g){
-            lines.push("   📧 " + g.email + " ⚠️ estimated pattern: "+g.pattern);
-          });
-        }
-      });
-
-      // Trustee
-      if (e.trustee?.name) {
-        lines.push("\n⚖️ TRUSTEE: " + e.trustee.name);
-        if (e.trustee.email) lines.push("   📧 " + e.trustee.email);
-        if (e.trustee.phone) lines.push("   📞 " + e.trustee.phone);
-        if (e.trustee.url)   lines.push("   🔗 " + e.trustee.url);
-      }
-
-      // Attorneys
-      (e.attorneys||[]).forEach(function(a){
-        lines.push("\n👔 ATTORNEY: " + a.name);
-        if (a.firm)      lines.push("   🏛️ " + a.firm);
-        if (a.email)     lines.push("   📧 " + a.email);
-        if (a.phone)     lines.push("   📞 " + a.phone);
-        if (a.barUrl)    lines.push("   🔗 State Bar: " + a.barUrl);
-        if (a.note)      lines.push("   ℹ️ " + a.note);
-      });
-
-      if (e.warnings?.length) {
-        lines.push("\n⚠️ WARNINGS:");
-        e.warnings.forEach(function(w){ lines.push("   " + w); });
-      }
-
-      // Update contact in CRM with found data
-      var contact = contacts.find(function(x){ return x.caseNo===c.caseNo; });
-      if (contact) {
-        if (e.company?.phone && !contact.phone) contact.phone = e.company.phone;
-        if (e.company?.website && !contact.website) contact.website = e.company.website;
-        if (e.company?.emails?.[0] && !contact.email) contact.email = e.company.emails[0];
-        if (e.attorneys?.[0]?.name && !contact.name) contact.name = e.attorneys[0].name;
-        if (e.attorneys?.[0]?.firm && !contact.firm) contact.firm = e.attorneys[0].firm;
-        if (e.attorneys?.[0]?.email && !contact.email) contact.email = e.attorneys[0].email;
-        if (e.attorneys?.[0]?.phone && !contact.phone) contact.phone = e.attorneys[0].phone;
-        saveContacts();
-      }
-
-      alert("ENRICHMENT RESULTS\n\n" + lines.join("\n"));
-    })
-    .catch(function(err){ alert("Enrichment failed: " + err.message); });
-}
-
-  var r=_searchResults[i]; if(!r) return;
-  var c=resultToContact(r);
-  if (!contacts.find(function(x){ return x.caseNo&&x.caseNo===c.caseNo; })){ contacts.push(c); saveContacts(); }
+function addAndOutreach(i){
+  var r=SR[i]; if(!r) return;
+  var c=rToC(r);
+  if(!contacts.find(function(x){return x.caseNo&&x.caseNo===c.caseNo;})){contacts.push(c);saveContacts();}
   openOutreach(c);
 }
 
+// ── ENRICH ──
+function enrichResult(i){
+  var r=SR[i]; if(!r) return;
+  if(!r.docketId){showToast("No docket ID for this case.");return;}
+  var btn=document.getElementById("enrich-btn-"+i);
+  var box=document.getElementById("enrich-"+i);
+  btn.textContent="⏳ Enriching…"; btn.disabled=true;
+  box.style.display="none";
+
+  fetch("/cases/"+r.docketId+"/enrich")
+    .then(function(resp){return resp.json();})
+    .then(function(data){
+      var e=data.enrichment||{};
+      var html='<div class="enrich-box">';
+
+      // Company
+      var co=e.company||{};
+      html+='<div class="enrich-section"><div class="enrich-title">🏢 Company</div>';
+      if(co.phone)   html+='<div>📞 <span class="enrich-val">'+esc(co.phone)+'</span> <span style="color:#888;font-size:11px">('+esc(co.source)+')</span></div>';
+      if(co.website) html+='<div>🌐 <a href="'+esc(co.website)+'" target="_blank">'+esc(co.website)+'</a></div>';
+      if(co.address) html+='<div>📍 '+esc(co.address)+'</div>';
+      if(co.mapsUrl) html+='<div><a href="'+esc(co.mapsUrl)+'" target="_blank">Open in Google Maps →</a></div>';
+      (co.emails||[]).forEach(function(em){html+='<div>📧 <span class="enrich-val">'+esc(em)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>';});
+      (co.scrapedPhones||[]).forEach(function(ph){html+='<div>📞 <span class="enrich-val">'+esc(ph)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>';});
+      if(!co.phone&&!(co.emails||[]).length&&!(co.scrapedPhones||[]).length) html+='<div style="color:#aaa">Not found on Google Maps — may be new/unregistered business</div>';
+      html+='</div>';
+
+      // Principal
+      var principals=e.principals||[];
+      if(principals.length){
+        html+='<div class="enrich-section"><div class="enrich-title">👤 Principal / Owner</div>';
+        principals.forEach(function(p){
+          html+='<div style="margin-bottom:4px"><strong>'+esc(p.name)+'</strong> — '+esc(p.role||"")+'</div>';
+          if(p.email) html+='<div>📧 <span class="enrich-val">'+esc(p.email)+'</span></div>';
+          if(p.phone) html+='<div>📞 <span class="enrich-val">'+esc(p.phone)+'</span></div>';
+          (p.emailGuesses||[]).slice(0,3).forEach(function(g){
+            html+='<div>📧 <span style="color:#888">'+esc(g.email)+'</span> <span class="est">⚠️ estimated ('+esc(g.pattern)+')</span></div>';
+          });
+        });
+        html+='</div>';
+      } else {
+        html+='<div class="enrich-section"><div class="enrich-title">👤 Principal / Owner</div><div style="color:#aaa">Not found in petition text — manual review needed</div></div>';
+      }
+
+      // Trustee
+      var tr=e.trustee||{};
+      html+='<div class="enrich-section"><div class="enrich-title">🏛️ Trustee</div>';
+      if(tr.name){
+        html+='<div><strong>'+esc(tr.name)+'</strong></div>';
+        if(tr.email) html+='<div>📧 <span class="enrich-val">'+esc(tr.email)+'</span></div>';
+        if(tr.phone) html+='<div>📞 <span class="enrich-val">'+esc(tr.phone)+'</span></div>';
+        if(tr.url)   html+='<div><a href="'+esc(tr.url)+'" target="_blank">USTP Directory →</a></div>';
+      } else {
+        html+='<div style="color:#aaa">Not yet assigned or not in USTP directory</div>';
+      }
+      html+='</div>';
+
+      // Attorneys
+      var atts=e.attorneys||[];
+      if(atts.length){
+        html+='<div class="enrich-section"><div class="enrich-title">⚖️ Attorney(s)</div>';
+        atts.forEach(function(a){
+          html+='<div style="margin-bottom:6px"><strong>'+esc(a.name)+'</strong>';
+          if(a.firm) html+=' — '+esc(a.firm);
+          html+='</div>';
+          if(a.email) html+='<div>📧 <span class="enrich-val">'+esc(a.email)+'</span></div>';
+          if(a.phone) html+='<div>📞 <span class="enrich-val">'+esc(a.phone)+'</span></div>';
+          if(a.barUrl) html+='<div><a href="'+esc(a.barUrl)+'" target="_blank">State Bar Lookup →</a></div>';
+        });
+        html+='</div>';
+      }
+
+      html+='</div>';
+      box.innerHTML=html; box.style.display="block";
+
+      // Save to contact
+      var co2=e.company||{};
+      var contact=contacts.find(function(x){return x.caseNo===r.docketNumber;});
+      if(contact){
+        if(co2.phone&&!contact.phone) contact.phone=co2.phone;
+        if(co2.website&&!contact.website) contact.website=co2.website;
+        if((co2.emails||[])[0]&&!contact.email) contact.email=co2.emails[0];
+        if((atts[0]||{}).name&&!contact.name) contact.name=atts[0].name;
+        if((atts[0]||{}).firm&&!contact.firm)  contact.firm=atts[0].firm;
+        if((atts[0]||{}).email&&!contact.email) contact.email=atts[0].email;
+        if((atts[0]||{}).phone&&!contact.phone) contact.phone=atts[0].phone;
+        saveContacts();
+        showToast("Contact updated with enriched data!");
+      }
+    })
+    .catch(function(err){showToast("Enrich failed: "+err.message);})
+    .finally(function(){btn.textContent="🔍 Enrich";btn.disabled=false;});
+}
+
 // ── CONTACTS ──
-function renderContacts() {
-  var q      = (document.getElementById("filterQ").value||"").toLowerCase();
-  var status = document.getElementById("filterStatus").value;
-  var el     = document.getElementById("contacts-list");
-  var filtered = contacts.filter(function(c){
-    if (status!=="All"&&c.status!==status) return false;
-    if (!q) return true;
-    return [c.name,c.firm,c.debtor,c.caseNo,c.district,c.court,c.attorney].some(function(f){ return (f||"").toLowerCase().includes(q); });
+function renderContacts(){
+  var q=(document.getElementById("filterQ").value||"").toLowerCase();
+  var st=document.getElementById("filterStatus").value;
+  var el=document.getElementById("contacts-list");
+  var f=contacts.filter(function(c){
+    if(st!=="All"&&c.status!==st) return false;
+    if(!q) return true;
+    return [c.name,c.firm,c.debtor,c.caseNo,c.district,c.court,c.attorney].some(function(v){return(v||"").toLowerCase().includes(q);});
   });
-  if (!filtered.length) {
-    el.innerHTML='<div style="text-align:center;padding:32px 0;font-size:13px;color:#888780">'+(contacts.length===0?"No contacts yet — run a search to find new filings.":"No contacts match your filters.")+'</div>';
-    return;
-  }
+  if(!f.length){el.innerHTML='<div style="text-align:center;padding:32px 0;font-size:13px;color:#888780">'+(contacts.length===0?"No contacts yet — run a search to get started.":"No contacts match your filters.")+'</div>';return;}
   el.innerHTML="";
-  filtered.forEach(function(c){
-    var urg = c.filed ? urgencyLabel(c.filed) : null;
-    var sc  = STATUS_COLORS[c.status]||{bg:"#eee",color:"#333"};
-    var opts= STATUS_LIST.map(function(s){ return '<option'+(s===c.status?" selected":"")+'>'+s+'</option>'; }).join("");
-    var card= document.createElement("div");
-    card.className="card";
-    card.innerHTML='<div class="case-row">'
+  f.forEach(function(c){
+    var urg=c.filed?urgLabel(c.filed):null;
+    var sc=SC[c.status]||{bg:"#eee",c:"#333"};
+    var opts=SL.map(function(s){return'<option'+(s===c.status?" selected":"")+'>'+s+'</option>';}).join("");
+    var card=document.createElement("div"); card.className="card";
+    card.innerHTML='<div class="row">'
       +'<div style="flex:1;min-width:160px">'
-      +'<div style="font-weight:600;font-size:13px">'+(c.name||c.attorney||"(No name — click Edit)")+(c.firm?' <span style="font-weight:400;color:#888780">· '+c.firm+'</span>':"")+'</div>'
-      +'<div class="case-meta">'+(c.debtor?"<strong>"+c.debtor+"</strong> · ":"")+(c.caseNo?"Case "+c.caseNo+" · ":"")+(c.filed?c.filed+" · ":'')+'<span style="text-transform:uppercase">'+(c.court||c.district||"")+'</span></div>'
-      +(urg?'<div class="urgency" style="color:'+urg.color+'">'+urg.label+'</div>':"")
-      +(c.email?'<div style="font-size:12px;color:#888780;margin-top:2px">'+c.email+(c.phone?" · "+c.phone:"")+'</div>':"")
-      +(c.notes?'<div style="font-size:12px;color:#aaa;margin-top:4px;background:#f9f9f8;border-radius:5px;padding:4px 7px">'+c.notes+'</div>':"")
-      +(c.url?'<a href="'+c.url+'" target="_blank" style="font-size:11px">View case →</a>':"")
+        +'<div style="font-weight:600;font-size:13px">'+esc(c.name||c.attorney||"(No name — click Edit)")+(c.firm?' <span style="font-weight:400;color:#888780">· '+esc(c.firm)+'</span>':"")+'</div>'
+        +'<div class="info-row">'+(c.debtor?"<strong>"+esc(c.debtor)+"</strong> · ":"")+(c.caseNo?"Case "+esc(c.caseNo)+" · ":"")+(c.filed?c.filed+" · ":'')+'<span style="text-transform:uppercase">'+esc(c.court||c.district||"")+'</span></div>'
+        +(urg?'<div class="urg" style="color:'+urg.c+'">'+urg.t+'</div>':"")
+        +(c.email?'<div class="info-row">📧 '+esc(c.email)+(c.phone?" · 📞 "+esc(c.phone):"")+'</div>':"")
+        +(c.website?'<div class="info-row">🌐 <a href="'+esc(c.website)+'" target="_blank">'+esc(c.website)+'</a></div>':"")
+        +(c.notes?'<div style="font-size:12px;color:#aaa;margin-top:4px;background:#f9f9f8;border-radius:5px;padding:4px 7px">'+esc(c.notes)+'</div>':"")
+        +(c.url?'<a href="'+esc(c.url)+'" target="_blank" style="font-size:11px">View case →</a>':"")
       +'</div>'
-      +'<div class="case-actions">'
-      +'<select onchange="updateStatus(\''+c.id+'\',this.value)" style="padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;border:none;background:'+sc.bg+';color:'+sc.color+';cursor:pointer;font-family:inherit">'+opts+'</select>'
-      +'<button class="btn btn-small" style="background:#E1F5EE;color:#085041;border:none" onclick="openOutreachById(\''+c.id+'\')">✉️</button>'
-      +'<button class="btn btn-outline btn-small" onclick="editContact(\''+c.id+'\')">Edit</button>'
-      +'<button class="btn btn-small" style="background:#FAEEDA;color:#633806;border:none" onclick="removeContact(\''+c.id+'\')">✕</button>'
+      +'<div class="actions">'
+        +'<select onchange="updateStatus(\''+c.id+'\',this.value)" style="padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;border:none;background:'+sc.bg+';color:'+sc.c+';cursor:pointer;font-family:inherit">'+opts+'</select>'
+        +'<button class="btn btn-sm" style="background:#E1F5EE;color:#085041;border:none" onclick="openOutreachById(\''+c.id+'\')">✉️</button>'
+        +'<button class="btn btn-outline btn-sm" onclick="editContact(\''+c.id+'\')">Edit</button>'
+        +'<button class="btn btn-sm" style="background:#FAEEDA;color:#633806;border:none" onclick="removeContact(\''+c.id+'\')">✕</button>'
       +'</div></div>';
     el.appendChild(card);
   });
 }
 
-function updateStatus(id, val) {
-  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
-  c.status=val; saveContacts(); showToast("Status updated.");
-}
-
-function removeContact(id) {
-  contacts=contacts.filter(function(c){ return c.id!==id; });
-  saveContacts(); renderContacts(); showToast("Removed.");
-}
-
-function editContact(id) {
-  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
-  var name=prompt("Contact name:",c.name||""); if(name!==null) c.name=name;
-  var firm=prompt("Firm:",c.firm||""); if(firm!==null) c.firm=firm;
-  var email=prompt("Email:",c.email||""); if(email!==null) c.email=email;
-  var phone=prompt("Phone:",c.phone||""); if(phone!==null) c.phone=phone;
-  var notes=prompt("Notes:",c.notes||""); if(notes!==null) c.notes=notes;
+function updateStatus(id,val){var c=contacts.find(function(x){return x.id===id;});if(!c)return;c.status=val;saveContacts();showToast("Status updated.");}
+function removeContact(id){contacts=contacts.filter(function(c){return c.id!==id;});saveContacts();renderContacts();showToast("Removed.");}
+function editContact(id){
+  var c=contacts.find(function(x){return x.id===id;});if(!c)return;
+  var n=prompt("Contact name:",c.name||""); if(n!==null)c.name=n;
+  var f=prompt("Firm:",c.firm||""); if(f!==null)c.firm=f;
+  var e=prompt("Email:",c.email||""); if(e!==null)c.email=e;
+  var p=prompt("Phone:",c.phone||""); if(p!==null)c.phone=p;
+  var nt=prompt("Notes:",c.notes||""); if(nt!==null)c.notes=nt;
   saveContacts(); renderContacts(); showToast("Saved.");
 }
 
 // ── OUTREACH ──
-function buildMsg(c, key) {
-  return (TEMPLATES[key].body||"")
-    .replace(/\[NAME\]/g,       c.name||"[Name]")
-    .replace(/\[DEBTOR\]/g,     c.debtor||"[Debtor]")
-    .replace(/\[CASE_NO\]/g,    c.caseNo||"[Case No.]")
-    .replace(/\[DISTRICT\]/g,   c.district||c.court||"[District]")
-    .replace(/\[YOUR_NAME\]/g,  yourName||"[Your Name]")
-    .replace(/\[YOUR_PHONE\]/g, yourPhone||"[Your Phone]");
+function buildMsg(c,key){
+  return (TMPLS[key].body||"")
+    .replace(/\[NAME\]/g,c.name||"[Name]")
+    .replace(/\[DEBTOR\]/g,c.debtor||"[Debtor]")
+    .replace(/\[CASE_NO\]/g,c.caseNo||"[Case No.]")
+    .replace(/\[DISTRICT\]/g,c.district||c.court||"[District]")
+    .replace(/\[YOUR_NAME\]/g,yourName||"[Your Name]")
+    .replace(/\[YOUR_PHONE\]/g,yourPhone||"[Your Phone]");
 }
 
-function renderOutreachTemplates() {
-  if (outreachContact) return;
-  var el   = document.getElementById("outreach-content");
-  var btns = Object.keys(TEMPLATES).map(function(k){
-    return '<button class="btn btn-outline btn-small" onclick="setTmpl(\''+k+'\')" style="'+(k===currentTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TEMPLATES[k].label+'</button>';
-  }).join("");
-  var t = TEMPLATES[currentTmpl];
+function renderTmplList(){
+  if(outreachC) return;
+  var el=document.getElementById("outreach-content");
+  var btns=Object.keys(TMPLS).map(function(k){return'<button class="btn btn-outline btn-sm" onclick="setTmpl(\''+k+'\')" style="'+(k===curTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TMPLS[k].label+'</button>';}).join("");
+  var t=TMPLS[curTmpl];
   el.innerHTML='<div style="font-size:13px;font-weight:500;margin-bottom:10px">Outreach Templates</div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+btns+'</div>'
-    +(t.subject?'<div style="font-size:12px;color:#888780;margin-bottom:8px"><strong>Subject:</strong> '+t.subject+'</div>':"")
-    +'<pre style="background:#f0f0ef;border-radius:8px;padding:12px 14px;border:0.5px solid #e8e8e5">'+t.body+'</pre>'
-    +'<div style="font-size:12px;color:#888780;margin-top:10px">Click ✉️ on any contact to personalize and send. Add your name and phone in ⚙️ Settings.</div>';
+    +(t.subject?'<div style="font-size:12px;color:#888780;margin-bottom:8px"><strong>Subject:</strong> '+esc(t.subject)+'</div>':"")
+    +'<pre style="background:#f0f0ef;border-radius:8px;padding:12px 14px;border:0.5px solid #e8e8e5">'+esc(t.body)+'</pre>'
+    +'<div style="font-size:12px;color:#888780;margin-top:10px">Click ✉️ on any contact to personalize and send.</div>';
 }
 
-function setTmpl(k) {
-  currentTmpl=k;
-  if (outreachContact) renderOutreachCompose(); else renderOutreachTemplates();
-}
+function setTmpl(k){curTmpl=k;if(outreachC)renderCompose();else renderTmplList();}
+function openOutreach(c){outreachC=c;showTab(2);renderCompose();}
+function openOutreachById(id){var c=contacts.find(function(x){return x.id===id;});if(c)openOutreach(c);}
 
-function openOutreach(c) {
-  outreachContact=c; showTab(2); renderOutreachCompose();
-}
-
-function openOutreachById(id) {
-  var c=contacts.find(function(x){ return x.id===id; });
-  if (c) openOutreach(c);
-}
-
-function renderOutreachCompose() {
-  var c   = outreachContact;
-  var el  = document.getElementById("outreach-content");
-  var msg = buildMsg(c, currentTmpl);
-  var t   = TEMPLATES[currentTmpl];
-  var subject = (t.subject||"").replace(/\[DEBTOR\]/g,c.debtor||"").replace(/\[CASE_NO\]/g,c.caseNo||"");
-  var btns = Object.keys(TEMPLATES).map(function(k){
-    return '<button class="btn btn-outline btn-small" onclick="setTmpl(\''+k+'\')" style="'+(k===currentTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TEMPLATES[k].label+'</button>';
-  }).join("");
-  var msgEscaped = msg.replace(/`/g,"\\`").replace(/\$/g,"\\$");
+function renderCompose(){
+  var c=outreachC;
+  var el=document.getElementById("outreach-content");
+  var msg=buildMsg(c,curTmpl);
+  var t=TMPLS[curTmpl];
+  var subj=(t.subject||"").replace(/\[DEBTOR\]/g,c.debtor||"").replace(/\[CASE_NO\]/g,c.caseNo||"");
+  var btns=Object.keys(TMPLS).map(function(k){return'<button class="btn btn-outline btn-sm" onclick="setTmpl(\''+k+'\')" style="'+(k===curTmpl?"background:#f0f0ef;font-weight:500;":"")+'">'+TMPLS[k].label+'</button>';}).join("");
   el.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">'
-    +'<button class="btn btn-outline btn-small" onclick="closeOutreach()">← Back</button>'
-    +'<div style="font-size:14px;font-weight:600">'+c.debtor+'</div>'
-    +'<div style="font-size:12px;color:#888780">'+(c.caseNo?"Case "+c.caseNo:"")+(c.filed?" · Filed "+c.filed:"")+'</div></div>'
+    +'<button class="btn btn-outline btn-sm" onclick="closeOutreach()">← Back</button>'
+    +'<div style="font-size:14px;font-weight:600">'+esc(c.debtor)+'</div>'
+    +'<div style="font-size:12px;color:#888780">'+(c.caseNo?"Case "+esc(c.caseNo):"")+(c.filed?" · Filed "+c.filed:"")+'</div></div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+btns+'</div>'
-    +(subject?'<div style="margin-bottom:8px"><label>Subject</label><input type="text" id="out-subject" value="'+subject.replace(/"/g,"&quot;")+'" readonly/></div>':"")
-    +'<div style="margin-bottom:10px"><label>Message — edit as needed</label>'
-    +'<textarea id="outreach-msg" rows="14">'+msg+'</textarea></div>'
+    +(subj?'<div style="margin-bottom:8px"><label>Subject</label><input type="text" id="out-subj" value="'+esc(subj)+'" readonly/></div>':"")
+    +'<div style="margin-bottom:10px"><label>Message — edit as needed</label><textarea id="out-msg" rows="14">'+esc(msg)+'</textarea></div>'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
     +'<button class="btn btn-primary" style="flex:1" onclick="copyMsg()">📋 Copy</button>'
-    +(c.email?'<a href="mailto:'+c.email+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(msg)+'" class="btn btn-green" style="flex:1;text-align:center;text-decoration:none">📧 Open in Email</a>':"")
-    +(c.phone&&currentTmpl.includes("sms")?'<a href="sms:'+c.phone+'?body='+encodeURIComponent(msg)+'" class="btn" style="flex:1;background:#7C3AED;color:#fff;text-align:center;text-decoration:none">💬 SMS</a>':"")
+    +(c.email?'<a href="mailto:'+esc(c.email)+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(msg)+'" class="btn btn-green" style="flex:1">📧 Open in Email</a>':"")
+    +(c.phone&&curTmpl.includes("sms")?'<a href="sms:'+esc(c.phone)+'?body='+encodeURIComponent(msg)+'" class="btn" style="flex:1;background:#7C3AED;color:#fff">💬 SMS</a>':"")
     +'<button class="btn btn-outline" style="flex:1" onclick="markSent(\''+c.id+'\')">✓ Mark Sent</button>'
     +'</div>';
 }
 
-function closeOutreach() { outreachContact=null; renderOutreachTemplates(); }
-
-function copyMsg() {
-  var txt=document.getElementById("outreach-msg").value;
-  if (navigator.clipboard) navigator.clipboard.writeText(txt);
-  showToast("Copied!");
-}
-
-function markSent(id) {
-  var c=contacts.find(function(x){ return x.id===id; }); if(!c) return;
-  c.status="Outreach Sent"; saveContacts(); showToast("Marked as Outreach Sent.");
-}
+function closeOutreach(){outreachC=null;renderTmplList();}
+function copyMsg(){var t=document.getElementById("out-msg");if(t&&navigator.clipboard)navigator.clipboard.writeText(t.value);showToast("Copied!");}
+function markSent(id){var c=contacts.find(function(x){return x.id===id;});if(!c)return;c.status="Outreach Sent";saveContacts();showToast("Marked Outreach Sent.");}
 
 // ── PIPELINE ──
-function renderPipeline() {
+function renderPipeline(){
   var grid=document.getElementById("pipeline-grid");
   var summ=document.getElementById("pipeline-summary");
   grid.innerHTML="";
-  STATUS_LIST.forEach(function(s){
-    var cnt=contacts.filter(function(c){ return c.status===s; }).length;
-    var sc=STATUS_COLORS[s]||{bg:"#eee",color:"#333"};
-    var tile=document.createElement("div");
-    tile.className="pipeline-tile";
-    tile.onclick=function(){ document.getElementById("filterStatus").value=s; showTab(1); };
-    tile.innerHTML='<span class="badge" style="background:'+sc.bg+';color:'+sc.color+';font-size:10px">'+s+'</span><div class="count">'+cnt+'</div>';
+  SL.forEach(function(s){
+    var cnt=contacts.filter(function(c){return c.status===s;}).length;
+    var sc=SC[s]||{bg:"#eee",c:"#333"};
+    var tile=document.createElement("div"); tile.className="p-tile";
+    tile.onclick=function(){document.getElementById("filterStatus").value=s;showTab(1);};
+    tile.innerHTML='<span class="badge" style="background:'+sc.bg+';color:'+sc.c+';font-size:10px">'+s+'</span><div class="cnt">'+cnt+'</div>';
     grid.appendChild(tile);
   });
-  var won   =contacts.filter(function(c){ return c.status==="Closed Won"; }).length;
-  var hot   =contacts.filter(function(c){ var d=daysSince(c.filed); return d!==null&&d<=21&&c.status==="New Lead"; }).length;
-  var active=contacts.filter(function(c){ return !["Closed Won","Closed Lost","No Response"].includes(c.status); }).length;
-  var demos =contacts.filter(function(c){ return ["Demo Scheduled","Demo Done"].includes(c.status); }).length;
+  var won=contacts.filter(function(c){return c.status==="Closed Won";}).length;
+  var hot=contacts.filter(function(c){var d=daysSince(c.filed);return d!==null&&d<=21&&c.status==="New Lead";}).length;
+  var active=contacts.filter(function(c){return!["Closed Won","Closed Lost","No Response"].includes(c.status);}).length;
+  var demos=contacts.filter(function(c){return["Demo Scheduled","Demo Done"].includes(c.status);}).length;
   summ.innerHTML=[
     ["Total contacts",contacts.length],
     ["⚡ In 21-day window",hot,"#d35400"],
@@ -688,14 +645,12 @@ function renderPipeline() {
     ["Closed Won",won,"#27500A"],
     ["Est. MRR @ $200/client",fmt$(won*200),"#1D9E75"],
     ["Est. ARR run rate",fmt$(won*200*12),"#1D9E75"]
-  ].map(function(row){
-    return '<div class="summary-row"><span style="color:#888780">'+row[0]+'</span><span style="font-weight:500;color:'+(row[2]||"#1a1a18")+'">'+row[1]+'</span></div>';
-  }).join("");
+  ].map(function(row){return'<div class="sumrow"><span style="color:#888780">'+row[0]+'</span><span style="font-weight:500;color:'+(row[2]||"#1a1a18")+'">'+row[1]+'</span></div>';}).join("");
 }
 
 // ── SETTINGS ──
-function saveProfile() {
-  yourName =document.getElementById("yourName").value;
+function saveProfile(){
+  yourName=document.getElementById("yourName").value;
   yourPhone=document.getElementById("yourPhone").value;
   localStorage.setItem("bi-name",yourName);
   localStorage.setItem("bi-phone",yourPhone);
