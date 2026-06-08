@@ -9,10 +9,6 @@ const logger                       = require("./logger");
 
 router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
 router.options("*", cors());
-const { discoverSubchapterVCases } = require("./courtListenerSearchService");
-const { hydrateDocket }            = require("./caseHydrationService");
-const store                        = require("./store");
-const logger                       = require("./logger");
 
 router.get("/health", (req, res) => {
   res.json({ status:"ok", cases:store.listCases().length, hydrated:store.listCases({hydratedOnly:true}).length });
@@ -23,12 +19,11 @@ router.get("/debug/courtlistener/token", (req, res) => {
   res.json({ set:!!t, length:t.length, prefix:t?t.slice(0,4)+"...":null });
 });
 
-// GET /search
 router.get("/search", async (req, res) => {
   try {
     const { dateFrom, dateTo, court="all", maxPages="5", hydrate="false", q } = req.query;
     if (!dateFrom) return res.status(400).json({ error:"dateFrom required (YYYY-MM-DD)" });
-    logger.info(`/search dateFrom=${dateFrom} dateTo=${dateTo} court=${court} hydrate=${hydrate}`);
+    logger.info(`/search dateFrom=${dateFrom} dateTo=${dateTo} court=${court}`);
     const discovered = await discoverSubchapterVCases({ dateFrom, dateTo, court, maxPages:Math.min(parseInt(maxPages)||5,10), q });
     discovered.forEach(d => store.saveDiscoveredCase(d));
     let results = discovered;
@@ -49,33 +44,26 @@ router.get("/search", async (req, res) => {
   }
 });
 
-// GET /cases
 router.get("/cases", (req, res) => {
   res.json({ cases:store.listCases({ hydratedOnly:req.query.hydratedOnly==="true" }) });
 });
 
-// GET /cases/:docketId
 router.get("/cases/:docketId", (req, res) => {
   const c = store.getCase(req.params.docketId);
   if (!c) return res.status(404).json({ error:"Case not found" });
   res.json(c);
 });
 
-// GET+POST /cases/:docketId/hydrate
 async function hydrateRoute(req, res) {
   try {
-    const { docketId } = req.params;
-    const h = await hydrateDocket(docketId);
+    const h = await hydrateDocket(req.params.docketId);
     store.saveHydratedCase(h);
     res.json(h);
-  } catch(e) {
-    res.status(500).json({ error:e.message||"Internal error" });
-  }
+  } catch(e) { res.status(500).json({ error:e.message }); }
 }
 router.get("/cases/:docketId/hydrate", hydrateRoute);
 router.post("/cases/:docketId/hydrate", hydrateRoute);
 
-// GET /cases/:docketId/petition-documents
 router.get("/cases/:docketId/petition-documents", async (req, res) => {
   try {
     const c = store.getCase(req.params.docketId);
@@ -86,7 +74,6 @@ router.get("/cases/:docketId/petition-documents", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// GET /cases/:docketId/principals
 router.get("/cases/:docketId/principals", async (req, res) => {
   try {
     const c = store.getCase(req.params.docketId);
@@ -97,7 +84,6 @@ router.get("/cases/:docketId/principals", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// GET /cases/:docketId/outreach-contacts
 router.get("/cases/:docketId/outreach-contacts", async (req, res) => {
   try {
     const c = store.getCase(req.params.docketId);
@@ -108,7 +94,6 @@ router.get("/cases/:docketId/outreach-contacts", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// GET /cases/:docketId/raw
 router.get("/cases/:docketId/raw", async (req, res) => {
   try {
     const c = store.getCase(req.params.docketId);
@@ -119,18 +104,6 @@ router.get("/cases/:docketId/raw", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// POST /jobs/discover-subv
-router.post("/jobs/discover-subv", async (req, res) => {
-  try {
-    const { dateFrom, dateTo, court="all", maxPages=5 } = req.body;
-    if (!dateFrom) return res.status(400).json({ error:"dateFrom required" });
-    const discovered = await discoverSubchapterVCases({ dateFrom, dateTo, court, maxPages });
-    discovered.forEach(d => store.saveDiscoveredCase(d));
-    res.json({ queued:discovered.length, docketIds:discovered.map(d=>d.docketId) });
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-// GET /cases/:docketId/enrich
 router.get("/cases/:docketId/enrich", async (req, res) => {
   try {
     const { docketId } = req.params;
@@ -142,26 +115,32 @@ router.get("/cases/:docketId/enrich", async (req, res) => {
     }
     logger.info(`Enriching case ${docketId}`);
     const enriched = await enrichCase(c);
-    // Merge enrichment into stored case
     c.enrichment = enriched;
     store.saveHydratedCase(c);
     res.json({ docketId, enrichment: enriched });
   } catch(e) {
     logger.error("Enrich error:", e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error:e.message });
   }
 });
 
-// POST /enrich — enrich from raw data (no docketId needed)
 router.post("/enrich", async (req, res) => {
   try {
     const { debtor, courtId, trustee, attorneys, principals } = req.body;
-    if (!debtor) return res.status(400).json({ error: "debtor name required" });
+    if (!debtor) return res.status(400).json({ error:"debtor name required" });
     const enriched = await enrichCase({ debtor, courtId, trustee, attorneys, principals });
     res.json({ enrichment: enriched });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+router.post("/jobs/discover-subv", async (req, res) => {
+  try {
+    const { dateFrom, dateTo, court="all", maxPages=5 } = req.body;
+    if (!dateFrom) return res.status(400).json({ error:"dateFrom required" });
+    const discovered = await discoverSubchapterVCases({ dateFrom, dateTo, court, maxPages });
+    discovered.forEach(d => store.saveDiscoveredCase(d));
+    res.json({ queued:discovered.length, docketIds:discovered.map(d=>d.docketId) });
+  } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
 module.exports = router;
