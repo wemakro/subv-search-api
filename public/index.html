@@ -441,14 +441,23 @@ function enrichResult(i){
 
       // Company
       var co=e.company||{};
+      var ai=e.aiData||{};
       html+='<div class="enrich-section"><div class="enrich-title">🏢 Company</div>';
-      if(co.phone)   html+='<div>📞 <span class="enrich-val">'+esc(co.phone)+'</span> <span style="color:#888;font-size:11px">('+esc(co.source)+')</span></div>';
-      if(co.website) html+='<div>🌐 <a href="'+esc(co.website)+'" target="_blank">'+esc(co.website)+'</a></div>';
-      if(co.address) html+='<div>📍 '+esc(co.address)+'</div>';
-      if(co.mapsUrl) html+='<div><a href="'+esc(co.mapsUrl)+'" target="_blank">Open in Google Maps →</a></div>';
-      (co.emails||[]).forEach(function(em){html+='<div>📧 <span class="enrich-val">'+esc(em)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>';});
-      (co.scrapedPhones||[]).forEach(function(ph){html+='<div>📞 <span class="enrich-val">'+esc(ph)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>';});
-      if(!co.phone&&!(co.emails||[]).length&&!(co.scrapedPhones||[]).length) html+='<div style="color:#aaa">Not found on Google Maps — may be new/unregistered business</div>';
+      if(ai.tradeName) html+='<div><strong>DBA: '+esc(ai.tradeName)+'</strong></div>';
+      if(co.phone)     html+='<div>📞 <span class="enrich-val">'+esc(co.phone)+'</span> <span style="color:#888;font-size:11px">(Google Maps)</span></div>';
+      if(co.website)   html+='<div>🌐 <a href="'+esc(co.website)+'" target="_blank">'+esc(co.website)+'</a></div>';
+      if(ai.altWebsite)html+='<div>🌐 <a href="'+esc(ai.altWebsite)+'" target="_blank">'+esc(ai.altWebsite)+'</a> (alternate)</div>';
+      if(co.address)   html+='<div>📍 '+esc(co.address)+'</div>';
+      if(co.mapsUrl)   html+='<div><a href="'+esc(co.mapsUrl)+'" target="_blank">Open in Google Maps →</a></div>';
+      if(co.businessType)      html+='<div style="color:#555;font-size:11px;margin-top:3px">'+esc(co.businessType)+'</div>';
+      if(co.bankruptcyReason)  html+='<div style="color:#888;font-size:11px">📋 Filing reason: '+esc(co.bankruptcyReason)+'</div>';
+      (co.emails||[]).forEach(function(em){ html+='<div>📧 <span class="enrich-val">'+esc(em)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>'; });
+      (co.scrapedPhones||[]).forEach(function(ph){ html+='<div>📞 <span class="enrich-val">'+esc(ph)+'</span> <span style="color:#888;font-size:11px">(website)</span></div>'; });
+      if(ai.sources&&ai.sources.length) {
+        html+='<div style="margin-top:4px;font-size:11px;color:#888">Sources: ';
+        ai.sources.slice(0,3).forEach(function(s,i){ html+='<a href="'+esc(s)+'" target="_blank" style="font-size:11px">['+( i+1)+']</a> '; });
+        html+='</div>';
+      }
       html+='</div>';
 
       // Principal
