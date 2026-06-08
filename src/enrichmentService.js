@@ -6,6 +6,12 @@ const GOOGLE_KEY  = process.env.GOOGLE_API_KEY   || "";
 const GEMINI_KEY  = process.env.GEMINI_API_KEY   || "";
 const OPENAI_KEY  = process.env.OPENAI_API_KEY   || "";
 
+// Log which AI services are available on startup
+setTimeout(function() {
+  var logger = require("./logger");
+  logger.info("Enrichment services: Gemini=" + (GEMINI_KEY?"YES":"NO") + " OpenAI=" + (OPENAI_KEY?"YES":"NO") + " Google Places=" + (GOOGLE_KEY?"YES":"NO"));
+}, 100);
+
 // ── HTTP FETCH ──
 function fetchUrl(url, options) {
   options = options || {};
@@ -352,7 +358,10 @@ var STATE_MAP = {
 
 // ── MAIN ENRICHMENT ──
 async function enrichCase(caseData) {
-  var debtor    = caseData.debtor || caseData.caseName || caseData.debtorName || "";
+  var debtor    = (typeof caseData.debtor === "string" ? caseData.debtor : "") 
+               || (typeof caseData.caseName === "string" ? caseData.caseName : "")
+               || (typeof caseData.debtorName === "string" ? caseData.debtorName : "") 
+               || "";
   var courtId   = caseData.courtId || "";
   var caseNo    = caseData.docketNumber || caseData.caseNo || "";
   var trustee   = caseData.trustee || {};
