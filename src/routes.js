@@ -1,9 +1,13 @@
 const express = require("express");
 const cors    = require("cors");
 const router  = express.Router();
+const { discoverSubchapterVCases } = require("./courtListenerSearchService");
+const { hydrateDocket }            = require("./caseHydrationService");
+const { enrichCase }               = require("./enrichmentService");
+const store                        = require("./store");
+const logger                       = require("./logger");
 
-// Apply CORS to all routes
-router.use(cors({ origin: "*", methods: ["GET","POST","OPTIONS"], allowedHeaders: ["Content-Type","Authorization","Accept"] }));
+router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
 router.options("*", cors());
 const { discoverSubchapterVCases } = require("./courtListenerSearchService");
 const { hydrateDocket }            = require("./caseHydrationService");
@@ -124,6 +128,40 @@ router.post("/jobs/discover-subv", async (req, res) => {
     discovered.forEach(d => store.saveDiscoveredCase(d));
     res.json({ queued:discovered.length, docketIds:discovered.map(d=>d.docketId) });
   } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// GET /cases/:docketId/enrich
+router.get("/cases/:docketId/enrich", async (req, res) => {
+  try {
+    const { docketId } = req.params;
+    let c = store.getCase(docketId);
+    if (!c || !c.hydrated) {
+      logger.info(`Auto-hydrating ${docketId} before enrichment`);
+      c = await hydrateDocket(docketId);
+      store.saveHydratedCase(c);
+    }
+    logger.info(`Enriching case ${docketId}`);
+    const enriched = await enrichCase(c);
+    // Merge enrichment into stored case
+    c.enrichment = enriched;
+    store.saveHydratedCase(c);
+    res.json({ docketId, enrichment: enriched });
+  } catch(e) {
+    logger.error("Enrich error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /enrich — enrich from raw data (no docketId needed)
+router.post("/enrich", async (req, res) => {
+  try {
+    const { debtor, courtId, trustee, attorneys, principals } = req.body;
+    if (!debtor) return res.status(400).json({ error: "debtor name required" });
+    const enriched = await enrichCase({ debtor, courtId, trustee, attorneys, principals });
+    res.json({ enrichment: enriched });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = router;
