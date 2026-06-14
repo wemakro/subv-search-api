@@ -580,9 +580,12 @@ async function enrichCase(caseData) {
 
   var result = { company:null, aiData:null, trustee:null, attorneys:[], principals:[], warnings:[] };
 
+  logger.info("[enrich] start docketId=" + (caseData.docketId||"unknown") + " courtId=" + courtId);
+
   // 1. AI search — pass full case context
   var aiData = await aiSearchEnrich(caseData, debtor);
   result.aiData = aiData;
+  logger.info("[enrich] AI result docketId=" + (caseData.docketId||"unknown") + " parsed=" + (aiData ? "yes" : "no") + (aiData ? " confidence=" + (aiData.confidence||"?") : " (null — check AI key or parse)"));
 
   // 2. Google Places
   logger.info("Google Places: " + debtor);
@@ -654,9 +657,10 @@ async function enrichCase(caseData) {
   }
   if (!result.principals.length) result.warnings.push("No owner or principal found in public search — manual review needed.");
 
-  // 7. Trustee — from CourtListener first, then USTP lookup
+  // 7. Trustee — from CourtListener first, then USTP directory lookup
   var trusteeName = (caseData.trustee && caseData.trustee.name) ? caseData.trustee.name : null;
-  var td = await lookupTrustee(trusteeName);
+  var td = lookupTrusteeFromDirectory(trusteeName, courtId);
+  logger.info("[enrich] trustee lookup docketId=" + (caseData.docketId||"unknown") + " courtId=" + courtId + " matched=" + (td && td.name ? "yes name=" + td.name : "no"));
   result.trustee = Object.assign({}, caseData.trustee||{}, td);
 
   // 8. Attorneys — add state bar links
