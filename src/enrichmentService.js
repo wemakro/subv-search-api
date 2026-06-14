@@ -177,9 +177,9 @@ async function callGemini(prompt) {
         contents: [{ parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
         generationConfig: {
-          responseMimeType: "application/json",
           temperature: 0.1,
           maxOutputTokens: 4096
+          // NOTE: responseMimeType NOT set here — incompatible with google_search grounding
         }
       }
     );
@@ -310,24 +310,220 @@ async function scrapeWebsite(url) {
   return result;
 }
 
-// ── TRUSTEE LOOKUP ──
-async function lookupTrustee(name) {
-  if (!name) return { name:null, email:null, phone:null, source:"No trustee assigned", url:"https://www.justice.gov/ust/subchapter-v-trustees" };
-  try {
-    var res  = await fetchUrl("https://www.justice.gov/ust/subchapter-v-trustees", { timeout:10000 });
-    var text = stripHtml(res.body);
-    var last = name.split(" ").slice(-1)[0];
-    var idx  = text.indexOf(last);
-    if (idx > -1) {
-      var snip   = text.slice(Math.max(0,idx-100), idx+300);
-      var emails = extractEmails(snip);
-      var phones = extractPhones(snip);
-      if (emails.length || phones.length) {
-        return { name:name, email:emails[0]||null, phone:phones[0]||null, source:"USTP Directory", url:"https://www.justice.gov/ust/subchapter-v-trustees", confidence:"HIGH" };
-      }
+// ── USTP SUB-V TRUSTEE DIRECTORY (hardcoded from justice.gov) ──
+// Keyed by court ID — each entry has name, email, phone
+var TRUSTEE_DIRECTORY = {
+  meb: [
+    { name:"Stephen Darr",         email:"steve@darr.com",              phone:"(617) 510-7766" },
+    { name:"Joseph M. DiOrio",     email:"jdiorio@pldolaw.com",         phone:"(401) 824-5100" },
+    { name:"Stephen Gray",         email:"ssg@grayandcompanyllc.com",   phone:"(617) 875-6404" },
+    { name:"James LaMontagne",     email:"jlamontagne@sheehan.com",     phone:"(603) 627-8102" },
+    { name:"David B. Madoff",      email:"madoff@mandkllp.com",         phone:"(508) 543-0040" },
+    { name:"Jeffrey T. Piampiano", email:"trustee@dwmlaw.com",          phone:"(207) 772-1941" },
+    { name:"Tanya Sambatakos",     email:"tanya@molleurlaw.com",        phone:"(207) 283-3777" }
+  ],
+  nhb: [
+    { name:"James LaMontagne",     email:"jlamontagne@sheehan.com",     phone:"(603) 627-8102" },
+    { name:"Stephen Darr",         email:"steve@darr.com",              phone:"(617) 510-7766" },
+    { name:"Tanya Sambatakos",     email:"tanya@molleurlaw.com",        phone:"(207) 283-3777" }
+  ],
+  mab: [
+    { name:"Stephen Darr",         email:"steve@darr.com",              phone:"(617) 510-7766" },
+    { name:"James LaMontagne",     email:"jlamontagne@sheehan.com",     phone:"(603) 627-8102" },
+    { name:"David B. Madoff",      email:"madoff@mandkllp.com",         phone:"(508) 543-0040" }
+  ],
+  ndb: [
+    { name:"Douglas Flugum",       email:"dflugum@bugeyeventures.com",  phone:"(319) 389-4581" },
+    { name:"Robert Gainer",        email:"trustee@cutlerfirm.com",      phone:"(515) 223-6600" },
+    { name:"Thomas Kapusta",       email:"tkapusta@aol.com",            phone:"(605) 376-6715" },
+    { name:"Steven Nosek",         email:"snosek@noseklawfirm.com",     phone:"(612) 335-9171" },
+    { name:"Mary Sieling",         email:"mary@mantylaw.com",           phone:"(612) 465-0901" }
+  ],
+  mnb: [
+    { name:"Douglas Flugum",       email:"dflugum@bugeyeventures.com",  phone:"(319) 389-4581" },
+    { name:"Steven Nosek",         email:"snosek@noseklawfirm.com",     phone:"(612) 335-9171" },
+    { name:"Mary Sieling",         email:"mary@mantylaw.com",           phone:"(612) 465-0901" }
+  ],
+  txsb: [
+    { name:"Sylvia Mayer",         email:"smayer@mayerllp.com",         phone:"(713) 771-7700" },
+    { name:"Brendon Singh",        email:"bsingh@singhbankruptcy.com",  phone:"(713) 936-5785" }
+  ],
+  txnb: [
+    { name:"Robert Yaquinto",      email:"yaquinto@pattiandyaquinto.com", phone:"(214) 744-3000" }
+  ],
+  flmb: [
+    { name:"L. Todd Budgen",       email:"Todd@C11Trustee.com",         phone:"(407) 232-9118" },
+    { name:"Aaron Cohen",          email:"aaron@arcohenlaw.com",        phone:"(904) 389-7277" },
+    { name:"Kathleen L. DiSanto",  email:"disanto.trustee@bushross.com",phone:"(813) 224-9255" },
+    { name:"Amy Mayer",            email:"amayer@bergersingerman.com",  phone:"(813) 498-3400" }
+  ],
+  flsb: [
+    { name:"Carol Fox",            email:"cfox@glassratner.com",        phone:"(954) 494-2856" },
+    { name:"Soneet R. Kapila",     email:"trustee@kapilatrustee.com",   phone:"(954) 761-1011" },
+    { name:"Aleida Martinez-Molina",email:"martinez@subv-trustee.com", phone:"(305) 610-0484" }
+  ],
+  flnb: [
+    { name:"Jodi Dubose",          email:"jdubose@srbp.com",            phone:"(850) 637-1836" }
+  ],
+  nysb: [
+    { name:"Eric Huebscher",       email:"ehuebscher@huebscherconsulting.com", phone:"(646) 584-3141" },
+    { name:"Heidi Sorvino",        email:"sorvinoh@whiteandwilliams.com",phone:"(212) 631-4417" },
+    { name:"Jolene Wee",           email:"jwee@jw-infinity.com",        phone:"(646) 204-0033" }
+  ],
+  nyeb: [
+    { name:"Gerard Luckman",       email:"gluckman@forchellilaw.com",   phone:"(516) 248-1700" },
+    { name:"Jolene Wee",           email:"jwee@jw-infinity.com",        phone:"(646) 204-0033" }
+  ],
+  njb: [
+    { name:"Nancy Isaacson",       email:"nisaacson@greenbaumlaw.com",  phone:"(973) 577-1930" },
+    { name:"Mark Politan",         email:"mpolitan@politanlaw.com",     phone:"(973) 768-6072" }
+  ],
+  deb: [
+    { name:"David Klauder",        email:"dklauder@bk-legal.com",       phone:"(302) 803-4600" },
+    { name:"Jami Nimeroff",        email:"jnimeroff@bmnlawyers.com",    phone:"(267) 861-5335" }
+  ],
+  paeb: [
+    { name:"Holly Miller",         email:"hsmiller@gsbblaw.com",        phone:"(215) 238-0012" },
+    { name:"Nicole Nigrelli",      email:"nnigrelli@ciardilaw.com",     phone:"(215) 557-3550" }
+  ],
+  ilnb: [
+    { name:"Ira Bodenstein",       email:"ibodenstein@cozen.com",       phone:"(312) 474-1647" },
+    { name:"Robert Handler",       email:"rhandler@com-rec.com",        phone:"(312) 845-5001" }
+  ],
+  ganb: [
+    { name:"Leon Jones",           email:"Ljones@joneswalden.com",      phone:"(404) 564-9300" },
+    { name:"Tamara Ogier",         email:"tmo@orsatl.com",              phone:"(404) 525-4000" }
+  ],
+  gamb: [
+    { name:"Jenny Walker",         email:"Trustee.jmw@adamshemingway.com", phone:"(478) 200-6184" }
+  ],
+  caeb: [
+    { name:"Lisa Holder",          email:"lholder@lnhpc.com",           phone:"(661) 205-2385" },
+    { name:"Scott M. Sackett",     email:"scott.sackett@efmt.com",      phone:"(916) 930-9900" }
+  ],
+  canb: [
+    { name:"Christopher Hayes",    email:"chayestrustee@gmail.com",     phone:"(925) 725-4323" },
+    { name:"Gina Klump",           email:"gklump@klumplaw.net",         phone:"(707) 778-0111" }
+  ],
+  cacb: [
+    { name:"Caroline Djang",       email:"cdjang@buchalter.com",        phone:"(949) 224-6252" },
+    { name:"Robert Goe",           email:"rgoe@goeforlaw.com",          phone:"(949) 798-2460" },
+    { name:"Susan Seflin",         email:"sks@bg.law",                  phone:"(818) 827-9202" }
+  ],
+  ohsb: [
+    { name:"Patricia Fugee",       email:"patricia.fugee@fisherbroyles.com", phone:"(419) 351-6598" }
+  ],
+  ohnb: [
+    { name:"Patricia Fugee",       email:"patricia.fugee@fisherbroyles.com", phone:"(419) 351-6598" }
+  ],
+  azb: [
+    { name:"Edward Burr",          email:"Ted@MacRestructuring.com",    phone:"(602) 418-2906" },
+    { name:"Christopher Simpson",  email:"csimpson@omlaw.com",          phone:"(602) 640-9349" }
+  ],
+  cob: [
+    { name:"Joli A. Lofstedt",     email:"joli@jaltrustee.com",         phone:"(303) 476-6915" },
+    { name:"Kevin S. Neiman",      email:"trustee@ksnpc.com",           phone:"(303) 996-8637" }
+  ],
+  vaeb: [
+    { name:"Lawrence A Katz",      email:"lkatz@hirschlerlaw.com",      phone:"(703) 584-8362" }
+  ],
+  mdb: [
+    { name:"Angela Shortall",      email:"ashortall@3cubed-as.com",     phone:"(410) 200-3465" },
+    { name:"Stephen Metz",         email:"smetz@offitkurman.com",       phone:"(240) 507-1723" }
+  ],
+  dcb: [
+    { name:"Monique D. Almy",      email:"malmy@crowell.com",           phone:"(202) 624-2935" },
+    { name:"Jolene Wee",           email:"jwee@jw-infinity.com",        phone:"(646) 204-0033" }
+  ],
+  orb: [
+    { name:"Ted Troutman",         email:"ted@troutmanlawoffice.com",   phone:"(503) 292-6788" }
+  ],
+  wawb: [
+    { name:"Virginia A. Burdette", email:"vab@andrewsburdette.com",     phone:"(206) 441-0203" },
+    { name:"Geoffrey Groshong",    email:"trustee@groshonglaw.com",     phone:null }
+  ],
+  waeb: [
+    { name:"Virginia A. Burdette", email:"vab@andrewsburdette.com",     phone:"(206) 441-0203" }
+  ],
+  kyeb: [
+    { name:"Stephen Barnes",       email:"sbarnes@kentuckytrustee.com", phone:"(859) 225-4714" },
+    { name:"Charity Bird",         email:"cbird@kaplanjohnsonlaw.com",  phone:"(502) 540-8285" }
+  ],
+  kywb: [
+    { name:"Stephen Barnes",       email:"sbarnes@kentuckytrustee.com", phone:"(859) 225-4714" },
+    { name:"Charity Bird",         email:"cbird@kaplanjohnsonlaw.com",  phone:"(502) 540-8285" }
+  ],
+  ncmb: [
+    { name:"Anna B. Osterhagen",   email:"aosterhagen@earlywinslett.com", phone:"(919) 896-6006" }
+  ],
+  nceb: [
+    { name:"Anna B. Osterhagen",   email:"aosterhagen@earlywinslett.com", phone:"(919) 896-6006" }
+  ],
+  ksb: [
+    { name:"G. Matt Barberich",    email:"mbarberich@glassratner.com",  phone:"(913) 389-9270" }
+  ],
+  nebraskab: [
+    { name:"Donald Swanson",       email:"don.swanson@koleyjessen.com", phone:"(402) 343-3726" }
+  ],
+  nvb: [
+    { name:"Jeanette McPherson",   email:"TrusteeJMcPherson@foxrothschild.com", phone:"(702) 699-5923" },
+    { name:"Brian D. Shapiro",     email:"trustee@trusteeshapiro.com",  phone:"(702) 386-8600" }
+  ],
+  ctb: [
+    { name:"George Purtill",       email:"george.m.purtill@snet.net",  phone:"(860) 659-0569" }
+  ],
+  rib: [
+    { name:"Joseph M. DiOrio",     email:"jdiorio@pldolaw.com",         phone:"(401) 824-5100" }
+  ],
+  hib: [
+    { name:"Wayne Mau",            email:"wayne@wmaulaw.com",           phone:"(808) 781-8494" }
+  ]
+};
+
+function lookupTrusteeFromDirectory(trusteeName, courtId) {
+  // First try to match by name in the directory
+  if (trusteeName) {
+    var lastName = trusteeName.split(" ").slice(-1)[0].toLowerCase();
+    // Search all districts
+    var allTrustees = [];
+    Object.keys(TRUSTEE_DIRECTORY).forEach(function(cid) {
+      TRUSTEE_DIRECTORY[cid].forEach(function(t) { allTrustees.push(t); });
+    });
+    var match = allTrustees.find(function(t) {
+      return t.name.toLowerCase().includes(lastName);
+    });
+    if (match) {
+      return {
+        name:       match.name,
+        email:      match.email || null,
+        phone:      match.phone || null,
+        source:     "USTP Sub-V Trustee Directory (justice.gov)",
+        url:        "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
+        confidence: "HIGH"
+      };
     }
-  } catch(e) { logger.warn("Trustee lookup error: "+e.message); }
-  return { name:name, email:null, phone:null, source:"USTP Directory — manual lookup", url:"https://www.justice.gov/ust/subchapter-v-trustees", confidence:"MEDIUM" };
+  }
+  // Fall back to listing trustees for the court district
+  if (courtId && TRUSTEE_DIRECTORY[courtId]) {
+    var list = TRUSTEE_DIRECTORY[courtId];
+    return {
+      name:       trusteeName || "See directory for " + courtId,
+      email:      list[0] ? list[0].email : null,
+      phone:      list[0] ? list[0].phone : null,
+      allTrustees:list,
+      source:     "USTP Sub-V Trustee Directory (justice.gov)",
+      url:        "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
+      confidence: trusteeName ? "MEDIUM" : "LOW"
+    };
+  }
+  return {
+    name:       trusteeName || null,
+    email:      null,
+    phone:      null,
+    source:     "USTP Directory — trustee not yet matched",
+    url:        "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
+    confidence: "LOW"
+  };
 }
 
 var STATE_BAR = {
