@@ -244,19 +244,30 @@ async function callOpenAI(prompt) {
 
 // ── AI ENRICHMENT ──
 async function aiSearchEnrich(caseData, debtorName) {
-  if (!GEMINI_KEY && !OPENAI_KEY) { logger.warn("No AI key configured"); return null; }
+  if (!GEMINI_KEY && !OPENAI_KEY) {
+    logger.warn("No AI key configured");
+    return { _failed: true, _reason: "No AI API key configured" };
+  }
   var prompt = buildGeminiPrompt(caseData, debtorName);
   var text   = null;
+  var reason = "";
   if (GEMINI_KEY) {
     logger.info("Gemini enrichment: " + debtorName);
     text = await callGemini(prompt);
+    if (!text) reason = "Gemini unavailable (credits depleted or API error)";
   }
   if (!text && OPENAI_KEY) {
     logger.info("OpenAI fallback: " + debtorName);
     text = await callOpenAI(prompt);
+    if (!text) reason = reason
+      ? reason + "; OpenAI unavailable (quota exceeded or API error)"
+      : "OpenAI unavailable (quota exceeded or API error)";
   }
   var result = parseJsonFromText(text);
-  if (!result) logger.warn("AI parse failed for: " + debtorName + " | raw: " + String(text||"").slice(0, 500));
+  if (!result) {
+    logger.warn("AI parse failed for: " + debtorName + " | raw: " + String(text||"").slice(0, 500));
+    return { _failed: true, _reason: reason || "AI returned unparseable response" };
+  }
   return result;
 }
 
@@ -584,6 +595,11 @@ async function enrichCase(caseData) {
 
   // 1. AI search — pass full case context
   var aiData = await aiSearchEnrich(caseData, debtor);
+  if (aiData && aiData._failed) {
+    result.warnings.push("AI enrichment unavailable: " + aiData._reason);
+    logger.info("[enrich] AI failed docketId=" + (caseData.docketId||"unknown") + " reason=" + aiData._reason);
+    aiData = null;
+  }
   result.aiData = aiData;
   logger.info("[enrich] AI result docketId=" + (caseData.docketId||"unknown") + " parsed=" + (aiData ? "yes" : "no") + (aiData ? " confidence=" + (aiData.confidence||"?") : " (null — check AI key or parse)"));
 
