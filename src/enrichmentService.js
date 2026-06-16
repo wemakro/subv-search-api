@@ -642,20 +642,71 @@ async function enrichCase(caseData) {
              source:source||"Public web search", confidence:confidence||"MEDIUM", note:"Verify before outreach" };
   }
 
-  // 6. Principals — owner first, then petition signer, then other contacts
+  // 6. Principals — petition extraction first (highest trust), then AI on top
   result.principals = [];
+
+  // 6a. Pull in principals already extracted from petition text during hydration.
+  // These are HIGH confidence — they come directly from the signed petition PDF.
+  // Filter out extraction artifacts: names must be 2+ capitalised words, under 80 chars.
+  var NAME_RE = /^[A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+)+$/;
+  var hydrationPrincipals = (caseData.principals || []).filter(function(p) {
+    if (!p.name) return false;
+    var clean = p.name.replace(/\s+/g, " ").trim();
+    if (clean.length > 80) return false;
+    if (!NAME_RE.test(clean)) return false;
+    return true;
+  });
+
+  if (hydrationPrincipals.length) {
+    logger.info("[enrich] using " + hydrationPrincipals.length + " principal(s) from petition for docketId=" + (caseData.docketId||"unknown"));
+    hydrationPrincipals.forEach(function(p) {
+      result.principals.push({
+        name:         p.name.replace(/\s+/g, " ").trim(),
+        role:         p.role || p.title || "Principal",
+        title:        p.title || null,
+        email:        p.email || null,
+        phone:        p.phone || null,
+        emailGuesses: [],
+        domains:      [],
+        isPrimary:    p.isPrimary || false,
+        source:       p.source || "Petition text",
+        confidence:   p.confidence || "HIGH",
+        note:         "Extracted from signed bankruptcy petition"
+      });
+    });
+  }
+
+  // 6b. Add AI-found owner/signer only if not already present from petition
   if (aiData && aiData.ownerName) {
-    result.principals.push(makePrincipal(aiData.ownerName, aiData.ownerTitle||"Owner / Operator", aiData.ownerEmail, aiData.ownerPhone||result.company.phone, true, "Public web search", aiData.confidence));
+    var aiNameClean = aiData.ownerName.trim();
+    var alreadyHave = result.principals.some(function(p) {
+      return p.name.toLowerCase().includes(aiNameClean.toLowerCase()) ||
+             aiNameClean.toLowerCase().includes(p.name.toLowerCase());
+    });
+    if (!alreadyHave) {
+      result.principals.push(makePrincipal(aiData.ownerName, aiData.ownerTitle||"Owner / Operator", aiData.ownerEmail, aiData.ownerPhone||result.company.phone, true, "Public web search", aiData.confidence));
+    }
   }
   if (aiData && aiData.petitionSigner && aiData.petitionSigner !== (aiData.ownerName||"")) {
-    result.principals.push(makePrincipal(aiData.petitionSigner, aiData.petitionSignerTitle||"Authorized Representative", null, null, false, "Bankruptcy petition (public record)", "HIGH"));
+    var signerClean = aiData.petitionSigner.trim();
+    var signerPresent = result.principals.some(function(p) {
+      return p.name.toLowerCase().includes(signerClean.toLowerCase());
+    });
+    if (!signerPresent) {
+      result.principals.push(makePrincipal(aiData.petitionSigner, aiData.petitionSignerTitle||"Authorized Representative", null, null, false, "Bankruptcy petition (public record)", "HIGH"));
+    }
   }
   if (aiData && aiData.otherContacts) {
     aiData.otherContacts.forEach(function(oc) {
       if (oc && oc.name) result.principals.push(makePrincipal(oc.name, oc.role, oc.email, oc.phone, false, "Public web search", "MEDIUM"));
     });
   }
-  if (!result.principals.length) result.warnings.push("No owner or principal found in public search — manual review needed.");
+
+  if (!result.principals.length) {
+    result.warnings.push("No principal found in petition text or public search — manual review needed.");
+  } else {
+    logger.info("[enrich] total principals for docketId=" + (caseData.docketId||"unknown") + ": " + result.principals.length);
+  }
 
   // 7. Trustee — from CourtListener first, then USTP directory lookup
   var trusteeName = (caseData.trustee && caseData.trustee.name) ? caseData.trustee.name : null;
