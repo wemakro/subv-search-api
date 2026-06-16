@@ -649,11 +649,35 @@ async function enrichCase(caseData) {
   // These are HIGH confidence — they come directly from the signed petition PDF.
   // Filter out extraction artifacts: names must be 2+ capitalised words, under 80 chars.
   var NAME_RE = /^[A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+)+$/;
+
+  // Words that appear in petition form labels but never in a real person's name.
+  // Used to reject extraction artifacts that happen to look like capitalized words.
+  var FORM_WORDS = /^(City|State|ZIP|Code|Location|Address|Mailing|Principal|Place|Business|Street|Suite|Floor|County|Country|Name|Title|Date|Case|Court|Chapter|Section|Schedule|Signature|Debtor|Creditor|Trustee|Attorney|Office|United|States|Federal)$/;
+
+  function cleanPrincipalName(raw) {
+    // Collapse all whitespace (including newlines from PDF layout) to single spaces
+    var s = raw.replace(/\s+/g, " ").trim();
+    // Remove trailing punctuation artifacts
+    s = s.replace(/[,\.]+$/, "").trim();
+    // Deduplicate: PDF extraction often repeats the name twice on the same line
+    // e.g. "KIRK MURPHY KIRK MURPHY" → "KIRK MURPHY"
+    var words = s.split(" ");
+    if (words.length >= 4 && words.length % 2 === 0) {
+      var half = words.length / 2;
+      if (words.slice(0, half).join(" ") === words.slice(half).join(" ")) {
+        s = words.slice(0, half).join(" ");
+      }
+    }
+    return s;
+  }
+
   var hydrationPrincipals = (caseData.principals || []).filter(function(p) {
     if (!p.name) return false;
-    var clean = p.name.replace(/\s+/g, " ").trim();
+    var clean = cleanPrincipalName(p.name);
     if (clean.length > 80) return false;
     if (!NAME_RE.test(clean)) return false;
+    // Reject form-label artifacts: real names don't contain standalone field labels
+    if (clean.split(" ").some(function(w) { return FORM_WORDS.test(w); })) return false;
     return true;
   });
 
@@ -661,7 +685,7 @@ async function enrichCase(caseData) {
     logger.info("[enrich] using " + hydrationPrincipals.length + " principal(s) from petition for docketId=" + (caseData.docketId||"unknown"));
     hydrationPrincipals.forEach(function(p) {
       result.principals.push({
-        name:         p.name.replace(/\s+/g, " ").trim(),
+        name:         cleanPrincipalName(p.name),
         role:         p.role || p.title || "Principal",
         title:        p.title || null,
         email:        p.email || null,
