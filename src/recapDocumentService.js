@@ -4,7 +4,10 @@ const https  = require("https");
 
 async function fetchPdfBuffer(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "subv-crm/3.0" } }, (resp) => {
+    https.get(url, { headers: {
+      "User-Agent": "subv-crm/3.0",
+      "Authorization": "Token " + (process.env.COURTLISTENER_TOKEN || "")
+    }}, (resp) => {
       if (resp.statusCode !== 200) return reject(new Error(`PDF fetch status ${resp.statusCode}`));
       const chunks = [];
       resp.on("data", c => chunks.push(c));
