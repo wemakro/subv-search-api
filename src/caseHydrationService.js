@@ -83,14 +83,16 @@ function normalizeAttorneys(attorneys, parties) {
     const contact = a.contact_raw||a.contact||"";
     const emailMatch = contact.match(/[\w.+-]+@[\w-]+\.[a-z]{2,}/i);
     const phoneMatch = contact.match(/\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/);
+    const isUSTrusteeOffice = /united states trustee|office of (the )?us trustee/i.test(contact);
     return {
       id: a.id||null, name: a.name||"",
-      firm: a.firm_name||null,
+      firm: isUSTrusteeOffice ? "Office of the United States Trustee" : (a.firm_name||null),
       email: emailMatch?.[0]||null,
       phone: phoneMatch?.[0]?.trim()||null,
       fax: null,
       contactRaw: contact||null,
       representing: attyToParties[a.id]||[],
+      isUSTrusteeOffice,
       source: "CourtListener /attorneys"
     };
   });
