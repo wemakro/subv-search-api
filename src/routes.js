@@ -104,23 +104,37 @@ router.get("/cases/:docketId/raw", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
+// A hydration is only trustworthy if it produced a case name and at least
+// parties or petition documents. An empty caseName means the CourtListener
+// docket fetch was rate-limited and the record is incomplete — re-hydrate.
+function isUsableHydration(c) {
+  return c &&
+    c.hydrated &&
+    typeof c.caseName === "string" &&
+    c.caseName.trim().length > 0 &&
+    c.rawCounts &&
+    (c.rawCounts.partiesCount > 0 || c.rawCounts.petitionDocumentsCount > 0);
+}
+
 router.get("/cases/:docketId/enrich", async (req, res) => {
   try {
     const { docketId } = req.params;
     let c = store.getCase(docketId);
-    if (!c || !c.hydrated) {
-      logger.info(`Auto-hydrating ${docketId} before enrichment`);
+    if (!isUsableHydration(c)) {
+      logger.info(`[enrich] hydration missing or incomplete for ${docketId} — re-hydrating`);
       c = await hydrateDocket(docketId);
       store.saveHydratedCase(c);
+    } else {
+      logger.info(`[enrich] using cached hydration for ${docketId} caseName=${c.caseName}`);
     }
-    logger.info(`Enriching case ${docketId}`);
+    logger.info(`[enrich] enriching docketId=${docketId}`);
     const enriched = await enrichCase(c);
     c.enrichment = enriched;
     store.saveHydratedCase(c);
     res.json({ docketId, enrichment: enriched });
   } catch(e) {
     logger.error("Enrich error:", e.message);
-    res.status(500).json({ error:e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
