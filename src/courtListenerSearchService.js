@@ -3,19 +3,23 @@ const logger = require("./logger");
 
 const SEARCH_TEMPLATES = [
   {
+    // Docket-level search — matches cases where the docket itself is tagged Sub-V
     name: "docket-subv",
     type: "d",
     q: 'chapter:11 AND ("subchapter v" OR "subchapter 5" OR "small business debtor")',
   },
   {
+    // RECAP document search — matches filings that mention Sub-V in document text
     name: "recap-subv",
     type: "r",
     q: '("Subchapter V" OR "Subchapter 5" OR "election of subchapter v" OR "small business debtor") AND chapter:11',
   },
   {
+    // Docket entry search — TIGHTENED: must mention subchapter v OR small business debtor
+    // Removed "Voluntary Petition" and "Official Form 201" alone — too broad, matches all Chapter 11
     name: "filing-subv",
     type: "rd",
-    q: '("Voluntary Petition" OR "Official Form 201" OR "Subchapter V" OR "small business debtor") AND chapter:11',
+    q: '("Subchapter V" OR "small business debtor") AND chapter:11',
   },
 ];
 
@@ -75,8 +79,17 @@ async function discoverSubchapterVCases({ dateFrom, dateTo, court = "all", maxPa
     if (!seen.has(key)) { seen.add(key); deduped.push(h); }
   }
 
-  logger.info(`Discovery complete: ${allHits.length} total hits, ${deduped.length} unique dockets`);
-  return deduped;
+  // Post-filter: drop results with no docketId and no case name
+  // These are fee receipts and other noise entries
+  const filtered = deduped.filter(function(h) {
+    if (!h.docketId) return false;
+    // Drop pure fee receipt entries — they have no case name and no absolute URL
+    if (!h.caseName && !h.absoluteUrl) return false;
+    return true;
+  });
+
+  logger.info(`Discovery complete: ${allHits.length} total hits, ${deduped.length} unique, ${filtered.length} after noise filter`);
+  return filtered;
 }
 
 module.exports = { discoverSubchapterVCases };
