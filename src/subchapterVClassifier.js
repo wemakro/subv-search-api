@@ -10,10 +10,21 @@ function classifySubchapterV({ docket, bankruptcyInformation, parties, attorneys
   const reasons = [];
   let score = 0;
 
-  // Chapter check — must be 11
+  // Chapter check — must be 11, unless docket entries confirm Sub-V + Chapter 11 explicitly
   const chapter = docket?.chapter || bankruptcyInformation?.chapter || "";
-  if (String(chapter) !== "11") {
+
+  const descriptionConfirmsSubV = (docketEntries || []).some(e => {
+    const d = (e.description || "").toLowerCase();
+    return d.includes("subchapter v") && d.includes("chapter 11") && !d.includes("chapter 7");
+  });
+
+  if (String(chapter) !== "11" && !descriptionConfirmsSubV) {
     return { isLikely: false, confidence: "NONE", reasons: [`Chapter is ${chapter || "unknown"}, not 11`] };
+  }
+
+  if (descriptionConfirmsSubV && String(chapter) !== "11") {
+    reasons.push("Docket entry description confirms Chapter 11 Subchapter V (overriding metadata chapter field)");
+    score += 80;
   }
 
   // HIGH: explicit Sub-V flag in bankruptcy metadata
