@@ -8,10 +8,12 @@ const FIELD_PATTERNS = [
   {
     field: "signerName",
     patterns: [
+      /\/s\/\s+([A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,4})/,
       /signature\s+of\s+authorized\s+representative[^\n]{0,80}\n([^\n]{3,80})/i,
       /signature\s+of\s+debtor[^\n]{0,80}\n([^\n]{3,80})/i,
       /i\s+have\s+been\s+authorized\s+to\s+file[^\n]{0,200}(?:by|on behalf of)\s+([A-Z][^\n,]{3,60})/i,
       /authorized\s+(?:representative|signatory)[^\n]{0,60}\n([^\n]{3,80})/i,
+      /printed\s+name\s+of\s+authorized\s+representative[:\s\n]+([^\n,]{3,80})/i,
     ]
   },
   {
@@ -114,7 +116,6 @@ function extractField(text, fieldDef) {
     if (match) {
       const val = (match[1] || match[0]).trim().replace(/\s+/g, " ");
       if (val.length >= 3 && val.length <= 150) {
-        // Snippet: 60 chars before and after match
         const idx = text.indexOf(match[0]);
         const snippet = text.slice(Math.max(0, idx - 60), idx + match[0].length + 60).replace(/\n/g, " ");
         return { value: val, snippet };
@@ -135,7 +136,6 @@ function extractRolesNearNames(text) {
     while ((match = regex.exec(text)) !== null) {
       const name = (match[1] || match[2] || "").trim();
       if (name.length < 4 || name.split(" ").length < 2) continue;
-      // Avoid extracting legal boilerplate words as names
       if (/\b(the|this|said|above|below|within|herein|debtor|court|case|chapter|section)\b/i.test(name)) continue;
       const idx = match.index;
       const snippet = text.slice(Math.max(0, idx - 40), idx + match[0].length + 40).replace(/\n/g, " ");
