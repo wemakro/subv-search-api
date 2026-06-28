@@ -140,9 +140,31 @@ router.get("/cases/:docketId/raw", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
+// ── PIPELINE TEST TRIGGER — GET for easy browser testing ──
+// Remove this route after initial testing is confirmed
+router.get("/pipeline/run-test", async (req, res) => {
+  const secret = req.query.secret || "";
+  if (CRON_SECRET && secret !== CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const dryRun    = req.query.dryRun !== "false";
+  const startDate = req.query.startDate || "2026-06-15";
+  const endDate   = req.query.endDate   || "2026-06-28";
+
+  res.json({ status: "started", message: "Pipeline running in background", dryRun, startDate, endDate });
+
+  runDailyPipeline({
+    startDate,
+    endDate,
+    court:       "all",
+    dryRun,
+    triggeredBy: "browser_test",
+  }).catch(e => logger.error("Test pipeline error:", e.message));
+});
+
 // ── PIPELINE — MANUAL TRIGGER ──
 router.post("/pipeline/run", async (req, res) => {
-  // Require CRON_SECRET for security
   const secret = req.headers["x-cron-secret"] || req.body?.secret || "";
   if (CRON_SECRET && secret !== CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -150,7 +172,6 @@ router.post("/pipeline/run", async (req, res) => {
 
   const { startDate, endDate, court, dryRun, maxCases } = req.body || {};
 
-  // Run async — return immediately so request doesn't time out
   res.json({ status: "started", message: "Pipeline running in background — check /pipeline/runs for status" });
 
   runDailyPipeline({
@@ -163,7 +184,6 @@ router.post("/pipeline/run", async (req, res) => {
 });
 
 // ── PIPELINE — CRON ENDPOINT ──
-// Triggered by Render Cron Job daily at 6AM ET
 router.post("/pipeline/cron", async (req, res) => {
   const secret = req.headers["x-cron-secret"] || "";
   if (CRON_SECRET && secret !== CRON_SECRET) {
@@ -208,7 +228,7 @@ router.get("/pipeline/stats", async (req, res) => {
   try {
     const [casesResult, contactsResult, lastRunResult] = await Promise.all([
       query("SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE is_subchapter_v) AS subv FROM cases"),
-      query("SELECT COUNT(*) AS total, contact_type, COUNT(*) FROM contacts GROUP BY contact_type"),
+      query("SELECT contact_type, COUNT(*) FROM contacts GROUP BY contact_type"),
       query(`SELECT * FROM automation_runs
              WHERE status IN ('completed','completed_with_errors')
              ORDER BY completed_at DESC LIMIT 1`),
@@ -219,11 +239,11 @@ router.get("/pipeline/stats", async (req, res) => {
 
     res.json({
       cases: {
-        total:      parseInt(casesResult.rows[0].total, 10),
-        subchapterV:parseInt(casesResult.rows[0].subv,  10),
+        total:       parseInt(casesResult.rows[0].total, 10),
+        subchapterV: parseInt(casesResult.rows[0].subv,  10),
       },
-      contacts:    contactsByType,
-      lastRun:     lastRunResult.rows[0] || null,
+      contacts: contactsByType,
+      lastRun:  lastRunResult.rows[0] || null,
     });
   } catch(e) {
     res.status(500).json({ error: e.message });
