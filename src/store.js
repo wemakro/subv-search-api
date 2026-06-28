@@ -1,29 +1,48 @@
-// In-memory store — replace with Postgres/Supabase/Airtable in phase 2
-const casesByDocketId = new Map();
-const rawEvents       = [];
+"use strict";
+// Legacy in-memory store — kept for backward compatibility during transition
+// New code should use src/data/ repositories directly
+const logger = require("./logger");
+const { upsertCase, getCaseByDocketId, listCases } = require("./data/caseRepository");
 
-function saveDiscoveredCase(discovered) {
-  const id = String(discovered.docketId);
-  if (!casesByDocketId.has(id)) {
-    casesByDocketId.set(id, { ...discovered, hydrated: false, hydratedAt: null });
+// Thin wrappers that call the database
+async function saveDiscoveredCase(discovered) {
+  try {
+    await upsertCase(discovered);
+  } catch(e) {
+    logger.warn("saveDiscoveredCase DB error:", e.message);
   }
-  rawEvents.push({ type: "discovered", docketId: id, at: new Date().toISOString() });
 }
 
-function saveHydratedCase(hydrated) {
-  const id = String(hydrated.docketId);
-  const existing = casesByDocketId.get(id) || {};
-  casesByDocketId.set(id, { ...existing, ...hydrated, hydrated: true, hydratedAt: new Date().toISOString() });
-  rawEvents.push({ type: "hydrated", docketId: id, at: new Date().toISOString() });
+async function saveHydratedCase(hydrated) {
+  try {
+    await upsertCase(hydrated);
+  } catch(e) {
+    logger.warn("saveHydratedCase DB error:", e.message);
+  }
 }
 
-function getCase(docketId) {
-  return casesByDocketId.get(String(docketId)) || null;
+async function getCase(docketId) {
+  try {
+    return await getCaseByDocketId(docketId);
+  } catch(e) {
+    logger.warn("getCase DB error:", e.message);
+    return null;
+  }
 }
 
-function listCases({ hydratedOnly = false } = {}) {
-  const all = [...casesByDocketId.values()];
-  return hydratedOnly ? all.filter(c => c.hydrated) : all;
+async function listCasesLegacy(opts = {}) {
+  try {
+    return await listCases({ limit: 200 });
+  } catch(e) {
+    logger.warn("listCases DB error:", e.message);
+    return [];
+  }
 }
 
-module.exports = { saveDiscoveredCase, saveHydratedCase, getCase, listCases, rawEvents };
+module.exports = {
+  saveDiscoveredCase,
+  saveHydratedCase,
+  getCase,
+  listCases: listCasesLegacy,
+  rawEvents: [],
+};
