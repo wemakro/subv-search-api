@@ -34,19 +34,28 @@ const HEADERS = [
   "first_name",
   "last_name",
   "title",
+  // Email fields — clearly separated
   "primary_email",
   "primary_email_status",
-  "primary_phone",
-  "verification_status",
-  "overall_confidence_score",
+  "primary_email_inferred",
+  "primary_email_confidence",
+  // Phone fields — direct vs company clearly separated
+  "principal_direct_phone",
+  "company_main_phone",
+  "phone_source",
+  "sms_eligible",
+  // Organization
   "organization_name",
   "organization_website",
-  "organization_phone",
-  "organization_address_1",
+  "organization_industry",
   "organization_city",
   "organization_state",
+  // Quality
+  "verification_status",
+  "overall_confidence_score",
   "outreach_priority",
   "needs_review",
+  "review_reason",
   "approved_for_crm_import",
 ];
 
@@ -64,29 +73,31 @@ async function generatePrincipalCsv() {
       c.state,
       c.courtlistener_absolute_url,
       c.needs_review,
-      ct.id            AS contact_id,
+      c.review_reason,
+      ct.id                     AS contact_id,
       ct.full_name,
       ct.first_name,
       ct.last_name,
       ct.title,
       ct.primary_email,
       ct.primary_email_status,
-      ct.primary_phone,
+      ct.primary_email_confidence,
+      ct.primary_phone          AS principal_direct_phone,
       ct.verification_status,
       ct.overall_confidence_score,
       o.organization_name,
-      o.website        AS org_website,
-      o.primary_phone  AS org_phone,
-      o.address_line_1,
+      o.website                 AS org_website,
+      o.primary_phone           AS company_main_phone,
+      o.industry                AS org_industry,
       o.city,
-      o.state          AS org_state
+      o.state                   AS org_state
     FROM cases c
     JOIN case_contacts cc ON cc.case_id = c.id
     JOIN contacts ct      ON ct.id = cc.contact_id
     LEFT JOIN organizations o ON o.id = ct.organization_id
     WHERE ct.contact_type = 'principal'
       AND (ct.do_not_contact = FALSE OR ct.do_not_contact IS NULL)
-    ORDER BY c.petition_date DESC
+    ORDER BY c.petition_date DESC NULLS LAST
   `);
 
   const lines = [HEADERS.join(",")];
@@ -99,10 +110,18 @@ async function generatePrincipalCsv() {
 
     let priority = "low";
     if (daysSince !== null) {
-      if (daysSince <= 3)  priority = "urgent";
+      if (daysSince <= 3)       priority = "urgent";
       else if (daysSince <= 10) priority = "high";
       else if (daysSince <= 21) priority = "medium";
     }
+
+    // Email is inferred if status is not verified/confirmed
+    const emailInferred = row.primary_email_status === "unverified" ? "yes" : "no";
+
+    // Phone is only SMS-eligible if it's a direct principal number
+    // Company main phone is never marked SMS-eligible automatically
+    const hasDirectPhone = !!row.principal_direct_phone;
+    const smsEligible    = hasDirectPhone ? "manual_review_required" : "no";
 
     lines.push(rowToCsv([
       generatedAt,
@@ -122,17 +141,22 @@ async function generatePrincipalCsv() {
       row.title,
       row.primary_email,
       row.primary_email_status,
-      row.primary_phone,
-      row.verification_status,
-      row.overall_confidence_score,
+      emailInferred,
+      row.primary_email_confidence,
+      row.principal_direct_phone,
+      row.company_main_phone,
+      row.principal_direct_phone ? "petition_or_courtlistener" : "",
+      smsEligible,
       row.organization_name,
       row.org_website,
-      row.org_phone,
-      row.address_line_1,
+      row.org_industry,
       row.city,
       row.org_state,
+      row.verification_status,
+      row.overall_confidence_score,
       priority,
       row.needs_review ? "yes" : "no",
+      row.review_reason || "",
       "no",
     ]));
   }
