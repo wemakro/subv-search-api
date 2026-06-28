@@ -10,8 +10,27 @@ const logger                       = require("./logger");
 router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
 router.options("*", cors());
 
-router.get("/health", (req, res) => {
-  res.json({ status:"ok", cases:store.listCases().length, hydrated:store.listCases({hydratedOnly:true}).length });
+router.get("/health", async (req, res) => {
+  const { query } = require("./db/connection");
+  let dbStatus = "not_connected";
+  let tables = [];
+  try {
+    const result = await query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      ORDER BY table_name
+    `);
+    tables = result.rows.map(r => r.table_name);
+    dbStatus = "connected";
+  } catch(e) {
+    dbStatus = "error: " + e.message;
+  }
+  res.json({
+    status:   "ok",
+    database: dbStatus,
+    tables:   tables
+  });
 });
 
 router.get("/debug/courtlistener/token", (req, res) => {
