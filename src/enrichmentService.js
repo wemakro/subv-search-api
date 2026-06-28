@@ -6,7 +6,7 @@ const logger = require("./logger");
 const GOOGLE_KEY  = process.env.GOOGLE_API_KEY  || "";
 const GEMINI_KEY  = process.env.GEMINI_API_KEY  || "";
 const OPENAI_KEY  = process.env.OPENAI_API_KEY  || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL   || "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL   || "gemini-2.5-flash";
 
 // ── FETCH ──
 function fetchUrl(url, opts) {
