@@ -21,13 +21,11 @@ function buildDateRange(startDate, endDate) {
   // If explicit dates provided use them
   if (startDate && endDate) return { from: startDate, to: endDate };
 
-  const to   = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - LOOKBACK_DAYS);
-  return {
-    from: getDateString(from),
-    to:   getDateString(to),
-  };
+  // Default: yesterday only
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = getDateString(yesterday);
+  return { from: dateStr, to: dateStr };
 }
 
 async function getLastSearchDate() {
