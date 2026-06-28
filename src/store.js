@@ -1,10 +1,9 @@
 "use strict";
-// Legacy in-memory store — kept for backward compatibility during transition
-// New code should use src/data/ repositories directly
+// Legacy compatibility store — wraps database repositories
+// All functions are async — always use await when calling them
 const logger = require("./logger");
 const { upsertCase, getCaseByDocketId, listCases } = require("./data/caseRepository");
 
-// Thin wrappers that call the database
 async function saveDiscoveredCase(discovered) {
   try {
     await upsertCase(discovered);
