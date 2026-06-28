@@ -168,4 +168,134 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
 }
 
 async function processCase(discovered, runId, dryRun) {
-  const docketId =
+  const docketId = discovered.docketId;
+  if (!docketId) {
+    logger.warn("Skipping case with no docketId");
+    return null;
+  }
+
+  logger.info(`Processing case: ${discovered.caseName || docketId}`);
+
+  try {
+    // Hydrate
+    const hydrated = await hydrateDocket(docketId);
+    if (hydrated.error) {
+      logger.warn(`Hydration error for ${docketId}: ${hydrated.error}`);
+      return { error: hydrated.error, docketId };
+    }
+
+    // Save to database
+    const { isNew, caseDbId } = await saveCaseToDb(hydrated, runId, dryRun);
+    logger.info(`Case ${docketId} ${isNew ? "created" : "updated"} — db id: ${caseDbId}`);
+
+    return { docketId, caseDbId, isNew, caseName: hydrated.caseName };
+  } catch(e) {
+    logger.error(`Failed to process case ${docketId}: ${e.message}`);
+    return { error: e.message, docketId };
+  }
+}
+
+async function runDailyPipeline(opts = {}) {
+  const dryRun      = opts.dryRun      || false;
+  const triggeredBy = opts.triggeredBy || "manual";
+  const court       = opts.court       || "all";
+
+  // Build date range
+  let { from, to } = buildDateRange(opts.startDate, opts.endDate);
+
+  // If no explicit start date, use last successful run end date minus lookback
+  if (!opts.startDate) {
+    const lastDate = await getLastSearchDate();
+    if (lastDate) {
+      const d = new Date(lastDate);
+      d.setDate(d.getDate() - LOOKBACK_DAYS);
+      from = getDateString(d);
+    }
+  }
+
+  logger.info(`Daily pipeline starting — date range: ${from} to ${to} | dry run: ${dryRun}`);
+
+  // Acquire lock
+  const run = await acquireLock({
+    runType:     "daily",
+    startDate:   from,
+    endDate:     to,
+    triggeredBy,
+    dryRun,
+  });
+
+  if (!run) {
+    return { error: "Pipeline already running — skipped" };
+  }
+
+  const stats = {
+    cases_found:            0,
+    new_cases_created:      0,
+    existing_cases_updated: 0,
+    contacts_created:       0,
+    contacts_updated:       0,
+    cases_failed:           0,
+    error_summary:          [],
+  };
+
+  try {
+    // Discover cases
+    const discovered = await discoverSubchapterVCases({
+      dateFrom: from,
+      dateTo:   to,
+      court,
+      maxPages: 10,
+    });
+
+    stats.cases_found = discovered.length;
+    logger.info(`Discovered ${discovered.length} cases`);
+
+    // Cap at max cases per run
+    const toProcess = discovered.slice(0, MAX_CASES);
+    if (discovered.length > MAX_CASES) {
+      logger.warn(`Capping at ${MAX_CASES} cases (${discovered.length} found)`);
+    }
+
+    // Process each case — continue on individual failures
+    for (const d of toProcess) {
+      const result = await processCase(d, run.id, dryRun);
+      if (!result) continue;
+
+      if (result.error) {
+        stats.cases_failed++;
+        stats.error_summary.push({ docketId: result.docketId, error: result.error });
+      } else if (result.isNew) {
+        stats.new_cases_created++;
+      } else {
+        stats.existing_cases_updated++;
+      }
+
+      // Small delay between cases to avoid hammering APIs
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Release lock with stats
+    const completedRun = await releaseLock(run.id, stats);
+
+    logger.info(`Pipeline complete — ${stats.new_cases_created} new, ${stats.existing_cases_updated} updated, ${stats.cases_failed} failed`);
+
+    return {
+      runId:                run.id,
+      status:               completedRun.status,
+      dateRange:            { from, to },
+      casesFound:           stats.cases_found,
+      newCasesCreated:      stats.new_cases_created,
+      existingCasesUpdated: stats.existing_cases_updated,
+      casesFailed:          stats.cases_failed,
+      errors:               stats.error_summary,
+      dryRun,
+    };
+
+  } catch(e) {
+    logger.error(`Pipeline failed: ${e.message}`);
+    await releaseLock(run.id, { failed: true, error_summary: [{ error: e.message }] });
+    return { runId: run.id, error: e.message };
+  }
+}
+
+module.exports = { runDailyPipeline };
