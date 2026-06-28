@@ -5,32 +5,26 @@ const logger    = require("../logger");
 function escapeCell(val) {
   if (val === null || val === undefined) return "";
   const str = String(val);
-  // Prevent formula injection
   if (/^[=+\-@]/.test(str)) return `'${str}`;
-  // Escape quotes and wrap if needed
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
 }
 
-function rowToCsv(row) {
-  return row.map(escapeCell).join(",");
-}
+function rowToCsv(row) { return row.map(escapeCell).join(","); }
 
 function formatDate(val) {
   if (!val) return "";
-  try { return new Date(val).toISOString().slice(0, 10); }
-  catch(e) { return ""; }
+  try { return new Date(val).toISOString().slice(0, 10); } catch(e) { return ""; }
 }
 
 const HEADERS = [
-  // Export metadata
   "export_generated_at",
+  "automation_run_id",
   "record_status",
   "needs_review",
   "review_reason",
-  // Case fields
   "case_internal_id",
   "courtlistener_docket_id",
   "case_number",
@@ -39,6 +33,7 @@ const HEADERS = [
   "chapter",
   "is_subchapter_v",
   "petition_date",
+  "days_since_petition",
   "filing_status",
   "court_name",
   "court_id",
@@ -47,8 +42,6 @@ const HEADERS = [
   "courtlistener_case_url",
   "first_discovered_at",
   "last_checked_at",
-  "days_since_petition",
-  // Organization fields
   "organization_internal_id",
   "organization_name",
   "legal_name",
@@ -61,7 +54,6 @@ const HEADERS = [
   "organization_state",
   "organization_zip",
   "organization_industry",
-  // Contact fields
   "contact_internal_id",
   "contact_type",
   "contact_role",
@@ -73,14 +65,13 @@ const HEADERS = [
   "primary_email_status",
   "primary_email_confidence",
   "primary_phone",
+  "primary_phone_status",
   "verification_status",
   "overall_confidence_score",
   "do_not_contact",
-  // Relationship fields
   "is_primary_contact",
   "relationship_source",
   "relationship_confidence",
-  // Outreach fields
   "audience",
   "suggested_pipeline",
   "outreach_priority",
@@ -120,6 +111,8 @@ function getOutreachPriority(daysSince, contactType, isSubV) {
 async function generateMasterCsv(runId) {
   const generatedAt = new Date().toISOString();
 
+  // FIXED: join organization through the contact's own organization_id
+  // so each contact gets their own org (debtor company, law firm, etc.)
   const result = await query(`
     SELECT
       c.id                          AS case_id,
@@ -163,6 +156,7 @@ async function generateMasterCsv(runId) {
       ct.primary_email_status,
       ct.primary_email_confidence,
       ct.primary_phone,
+      ct.primary_phone_status,
       ct.verification_status,
       ct.overall_confidence_score,
       ct.do_not_contact,
@@ -170,16 +164,12 @@ async function generateMasterCsv(runId) {
       cc.source_type                AS rel_source,
       cc.confidence_score           AS rel_confidence
     FROM cases c
-    LEFT JOIN organizations o
-      ON o.id = (
-        SELECT id FROM organizations
-        WHERE organization_type = 'debtor_company'
-        ORDER BY created_at ASC LIMIT 1
-      )
     LEFT JOIN case_contacts cc ON cc.case_id = c.id
     LEFT JOIN contacts ct      ON ct.id = cc.contact_id
-    WHERE ct.do_not_contact = FALSE OR ct.do_not_contact IS NULL
-    ORDER BY c.petition_date DESC, c.id, ct.contact_type
+    LEFT JOIN organizations o  ON o.id = ct.organization_id
+    WHERE (ct.do_not_contact = FALSE OR ct.do_not_contact IS NULL)
+      AND ct.id IS NOT NULL
+    ORDER BY c.petition_date DESC NULLS LAST, c.id, ct.contact_type
   `);
 
   const lines = [HEADERS.join(",")];
@@ -190,12 +180,13 @@ async function generateMasterCsv(runId) {
       ? Math.floor((Date.now() - petitionDate.getTime()) / 86400000)
       : null;
 
-    const audience   = getAudience(row.contact_type);
-    const pipeline   = getSuggestedPipeline(row.contact_type);
-    const priority   = getOutreachPriority(daysSince, row.contact_type, row.is_subchapter_v);
+    const audience = getAudience(row.contact_type);
+    const pipeline = getSuggestedPipeline(row.contact_type);
+    const priority = getOutreachPriority(daysSince, row.contact_type, row.is_subchapter_v);
 
     lines.push(rowToCsv([
       generatedAt,
+      runId || "",
       "active",
       row.needs_review ? "yes" : "no",
       row.review_reason || "",
@@ -207,6 +198,7 @@ async function generateMasterCsv(runId) {
       row.chapter,
       row.is_subchapter_v ? "yes" : "no",
       formatDate(row.petition_date),
+      daysSince !== null ? daysSince : "",
       row.filing_status,
       row.court_name,
       row.court_id,
@@ -215,7 +207,6 @@ async function generateMasterCsv(runId) {
       row.courtlistener_absolute_url,
       formatDate(row.first_discovered_at),
       formatDate(row.last_checked_at),
-      daysSince !== null ? daysSince : "",
       row.org_id,
       row.organization_name,
       row.legal_name,
@@ -239,6 +230,7 @@ async function generateMasterCsv(runId) {
       row.primary_email_status,
       row.primary_email_confidence,
       row.primary_phone,
+      row.primary_phone_status || "unverified",
       row.verification_status,
       row.overall_confidence_score,
       row.do_not_contact ? "yes" : "no",
