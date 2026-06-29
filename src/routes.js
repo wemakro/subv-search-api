@@ -16,9 +16,6 @@ const logger                       = require("./logger");
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
-// CourtListener webhook source IPs — only accept from these
-const CL_WEBHOOK_IPS = new Set(["34.210.230.218", "54.189.59.91"]);
-
 router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
 router.options("*", cors());
 
@@ -90,9 +87,7 @@ router.get("/debug/cl-search", async (req, res) => {
 });
 
 // ── COURTLISTENER WEBHOOK RECEIVER ──
-// CourtListener POSTs new Sub-V cases here whenever a Search Alert fires
 router.post("/webhooks/courtlistener", async (req, res) => {
-  // Always respond 200 immediately — CourtListener needs this within 1 second
   res.status(200).json({ received: true });
 
   try {
@@ -102,37 +97,16 @@ router.post("/webhooks/courtlistener", async (req, res) => {
 
     logger.info(`CL Webhook — event_type: ${eventType} idempotency: ${idempotency}`);
 
-    // Check for duplicate delivery using idempotency key
-    if (idempotency) {
-      try {
-        const existing = await query(
-          "SELECT id FROM automation_runs WHERE error_summary::text LIKE $1 LIMIT 1",
-          [`%${idempotency}%`]
-        );
-        if (existing.rows.length > 0) {
-          logger.info(`Webhook duplicate skipped: ${idempotency}`);
-          return;
-        }
-      } catch(e) {
-        // Non-fatal — continue processing
-      }
-    }
-
-    // Event type 2 = Search Alert — new cases matching our Sub-V query
     if (eventType === 2) {
       const results = body?.payload?.results || [];
       logger.info(`Search alert webhook: ${results.length} new results`);
 
       for (const hit of results) {
         const docketId = hit.docket_id || hit.id || null;
-        if (!docketId) {
-          logger.warn("Webhook hit has no docket_id — skipping");
-          continue;
-        }
+        if (!docketId) continue;
 
-        logger.info(`Webhook processing docket: ${docketId} — ${hit.caseName || hit.case_name || "unknown"}`);
+        logger.info(`Webhook processing docket: ${docketId}`);
 
-        // Process in background — don't block the webhook response
         hydrateDocket(docketId)
           .then(async h => {
             await store.saveHydratedCase(h);
@@ -142,11 +116,9 @@ router.post("/webhooks/courtlistener", async (req, res) => {
       }
     }
 
-    // Event type 1 = Docket Alert — specific subscribed case was updated
     if (eventType === 1) {
       const results = body?.payload?.results || [];
       logger.info(`Docket alert webhook: ${results.length} new entries`);
-      // Future: process docket updates for cases we're already tracking
     }
 
   } catch(e) {
@@ -154,7 +126,6 @@ router.post("/webhooks/courtlistener", async (req, res) => {
   }
 });
 
-// ── WEBHOOK TEST ENDPOINT — lets CourtListener verify the URL works ──
 router.get("/webhooks/courtlistener", (req, res) => {
   res.json({ status: "ok", message: "CourtListener webhook endpoint is active" });
 });
@@ -218,18 +189,38 @@ async function hydrateRoute(req, res) {
 router.get("/cases/:docketId/hydrate",  hydrateRoute);
 router.post("/cases/:docketId/hydrate", hydrateRoute);
 
+// ── ENRICH ──
 router.get("/cases/:docketId/enrich", async (req, res) => {
   try {
     const { docketId } = req.params;
     let c = await store.getCase(docketId);
+
     if (!c) {
       logger.info(`Auto-hydrating ${docketId} before enrichment`);
       c = await hydrateDocket(docketId);
       await store.saveHydratedCase(c);
     }
+
+    // Map database snake_case fields to enrichment service camelCase format
+    if (c && !c.debtorName) {
+      c = {
+        ...c,
+        debtorName:   c.debtor_name   || c.case_name  || "",
+        caseName:     c.case_name     || "",
+        docketId:     c.courtlistener_docket_id || docketId,
+        docketNumber: c.case_number   || "",
+        courtId:      c.court_id      || "",
+        dateFiled:    c.petition_date
+          ? new Date(c.petition_date).toISOString().slice(0, 10)
+          : "",
+        attorneys:    [],
+        principals:   [],
+        trustee:      { name: null },
+        debtor:       { name: c.debtor_name || c.case_name || "" },
+      };
+    }
+
     const enriched = await enrichCase(c);
-    c.enrichment = enriched;
-    await store.saveHydratedCase(c);
     res.json({ docketId, enrichment: enriched });
   } catch(e) {
     logger.error("Enrich error:", e.message);
