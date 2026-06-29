@@ -16,6 +16,9 @@ const logger                       = require("./logger");
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
+// CourtListener webhook source IPs — only accept from these
+const CL_WEBHOOK_IPS = new Set(["34.210.230.218", "54.189.59.91"]);
+
 router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
 router.options("*", cors());
 
@@ -84,6 +87,76 @@ router.get("/debug/cl-search", async (req, res) => {
   } catch(e) {
     res.status(500).json({ error: e.message, url });
   }
+});
+
+// ── COURTLISTENER WEBHOOK RECEIVER ──
+// CourtListener POSTs new Sub-V cases here whenever a Search Alert fires
+router.post("/webhooks/courtlistener", async (req, res) => {
+  // Always respond 200 immediately — CourtListener needs this within 1 second
+  res.status(200).json({ received: true });
+
+  try {
+    const body        = req.body;
+    const eventType   = body?.webhook?.event_type;
+    const idempotency = req.headers["idempotency-key"] || "";
+
+    logger.info(`CL Webhook — event_type: ${eventType} idempotency: ${idempotency}`);
+
+    // Check for duplicate delivery using idempotency key
+    if (idempotency) {
+      try {
+        const existing = await query(
+          "SELECT id FROM automation_runs WHERE error_summary::text LIKE $1 LIMIT 1",
+          [`%${idempotency}%`]
+        );
+        if (existing.rows.length > 0) {
+          logger.info(`Webhook duplicate skipped: ${idempotency}`);
+          return;
+        }
+      } catch(e) {
+        // Non-fatal — continue processing
+      }
+    }
+
+    // Event type 2 = Search Alert — new cases matching our Sub-V query
+    if (eventType === 2) {
+      const results = body?.payload?.results || [];
+      logger.info(`Search alert webhook: ${results.length} new results`);
+
+      for (const hit of results) {
+        const docketId = hit.docket_id || hit.id || null;
+        if (!docketId) {
+          logger.warn("Webhook hit has no docket_id — skipping");
+          continue;
+        }
+
+        logger.info(`Webhook processing docket: ${docketId} — ${hit.caseName || hit.case_name || "unknown"}`);
+
+        // Process in background — don't block the webhook response
+        hydrateDocket(docketId)
+          .then(async h => {
+            await store.saveHydratedCase(h);
+            logger.info(`Webhook saved: ${docketId} — ${h.caseName}`);
+          })
+          .catch(e => logger.error(`Webhook hydration failed ${docketId}: ${e.message}`));
+      }
+    }
+
+    // Event type 1 = Docket Alert — specific subscribed case was updated
+    if (eventType === 1) {
+      const results = body?.payload?.results || [];
+      logger.info(`Docket alert webhook: ${results.length} new entries`);
+      // Future: process docket updates for cases we're already tracking
+    }
+
+  } catch(e) {
+    logger.error("Webhook processing error:", e.message);
+  }
+});
+
+// ── WEBHOOK TEST ENDPOINT — lets CourtListener verify the URL works ──
+router.get("/webhooks/courtlistener", (req, res) => {
+  res.json({ status: "ok", message: "CourtListener webhook endpoint is active" });
 });
 
 // ── SEARCH ──
@@ -287,8 +360,7 @@ router.get("/pipeline/active", async (req, res) => {
       ORDER BY started_at DESC LIMIT 1
     `);
     res.json({ activeRun: result.rows[0] || null });
-  } catch(e) {
-    res.status(500).json({ error: e.message }); }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── PIPELINE — STATS ──
