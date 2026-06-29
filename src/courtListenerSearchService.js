@@ -3,22 +3,16 @@ const logger = require("./logger");
 
 const SEARCH_TEMPLATES = [
   {
-    // Primary: docket-level search for Sub-V cases
+    // Primary: docket search with date filter — type=d works with dateFiled
     name: "docket-subv",
-    type: "r",
-    q: '"Subchapter V" AND "Chapter 11" NOT "Chapter 7" NOT "Chapter 13"',
+    type: "d",
+    q: '"Subchapter V" "Chapter 11"',
   },
   {
-    // Secondary: catch small business debtor filings
-    name: "small-business-debtor",
-    type: "r",
-    q: '"small business debtor" AND "Chapter 11" NOT "Chapter 7" NOT "Chapter 13"',
-  },
-  {
-    // Tertiary: explicit Sub-V election filings
-    name: "subv-election",
-    type: "r",
-    q: '"election of subchapter v" AND "Chapter 11" NOT "Chapter 7"',
+    // Secondary: catch additional filings mentioning small business debtor
+    name: "docket-sbd",
+    type: "d",
+    q: '"small business debtor" "Chapter 11"',
   },
 ];
 
@@ -37,25 +31,38 @@ async function runTemplate(template, { dateFrom, dateTo, court, maxPages }) {
   };
   if (court && court !== "all") params.court = court;
 
-  logger.info(`Search template [${template.name}] q="${params.q}"`);
+  logger.info(`Search [${template.name}] type=${template.type} q="${params.q}"`);
 
-  const hits = await getAllPages("/api/rest/v4/search/", params, { maxPages });
+  let hits = [];
+  try {
+    hits = await getAllPages("/api/rest/v4/search/", params, { maxPages });
+  } catch(e) {
+    logger.warn(`Template [${template.name}] failed: ${e.message}`);
+    return [];
+  }
+
   logger.info(`Template [${template.name}] returned ${hits.length} hits`);
 
   return hits.map(h => ({
-    docketId:     h.docket_id    || h.id         || null,
+    docketId:     h.docket_id      || h.id              || null,
     searchType:   template.name,
-    caseName:     h.caseName     || h.case_name   || "",
-    docketNumber: h.docketNumber || h.docket_number || "",
-    courtId:      h.court_id     || h.court       || "",
-    dateFiled:    h.dateFiled    || h.date_filed  || "",
-    absoluteUrl:  h.absolute_url
-      ? "https://www.courtlistener.com" + h.absolute_url
-      : h.docket_absolute_url
-        ? "https://www.courtlistener.com" + h.docket_absolute_url
+    caseName:     h.caseName       || h.case_name        || "",
+    docketNumber: h.docketNumber   || h.docket_number    || "",
+    courtId:      h.court_id       || h.court            || "",
+    courtName:    h.court          || "",
+    dateFiled:    h.dateFiled      || h.date_filed       || "",
+    chapter:      h.chapter        || null,
+    assignedTo:   h.assignedTo     || h.assigned_to      || null,
+    trusteeStr:   h.trustee_str    || null,
+    attorney:     h.attorney       || [],
+    firm:         h.firm           || [],
+    absoluteUrl:  h.docket_absolute_url
+      ? "https://www.courtlistener.com" + h.docket_absolute_url
+      : h.absolute_url
+        ? "https://www.courtlistener.com" + h.absolute_url
         : "",
     matchedQuery: template.q,
-    rawPreview:   JSON.stringify(h).slice(0, 300),
+    rawPreview:   JSON.stringify(h).slice(0, 400),
   }));
 }
 
@@ -67,12 +74,12 @@ async function discoverSubchapterVCases({ dateFrom, dateTo, court = "all", maxPa
       const hits = await runTemplate(tmpl, { dateFrom, dateTo, court, maxPages });
       allHits.push(...hits);
     } catch(e) {
-      logger.warn(`Template [${tmpl.name}] failed: ${e.message || JSON.stringify(e)}`);
+      logger.warn(`Template [${tmpl.name}] failed: ${e.message}`);
     }
   }
 
   // Deduplicate by docketId
-  const seen   = new Set();
+  const seen    = new Set();
   const deduped = [];
   for (const h of allHits) {
     const key = h.docketId
@@ -81,10 +88,9 @@ async function discoverSubchapterVCases({ dateFrom, dateTo, court = "all", maxPa
     if (!seen.has(key)) { seen.add(key); deduped.push(h); }
   }
 
-  // Drop noise — fee receipts and entries with no docketId and no case name
+  // Drop noise — entries with no docketId
   const filtered = deduped.filter(h => {
     if (!h.docketId) return false;
-    if (!h.caseName && !h.absoluteUrl) return false;
     return true;
   });
 
