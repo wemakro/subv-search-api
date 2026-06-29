@@ -23,7 +23,7 @@ router.options("*", cors());
 router.get("/health", async (req, res) => {
   let dbStatus = "not_connected";
   let tables   = [];
-  let caseCount = 0;
+  let caseCount    = 0;
   let contactCount = 0;
   try {
     const result = await query(`
@@ -217,6 +217,41 @@ router.get("/pipeline/runs/:id", async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error:"Run not found" });
     res.json(result.rows[0]);
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PIPELINE — RESET STUCK RUNS ──
+router.get("/pipeline/reset-stuck", async (req, res) => {
+  const secret = req.query.secret || "";
+  if (CRON_SECRET && secret !== CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const result = await query(`
+      UPDATE automation_runs
+      SET status = 'failed',
+          completed_at = NOW(),
+          error_summary = '{"error":"Manually reset via API"}'
+      WHERE status IN ('running', 'queued')
+      RETURNING id, status, started_at
+    `);
+    res.json({ message: "Stuck runs cleared", reset: result.rows });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── PIPELINE — CHECK ACTIVE RUN ──
+router.get("/pipeline/active", async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT * FROM automation_runs
+      WHERE status IN ('running', 'queued')
+      ORDER BY started_at DESC LIMIT 1
+    `);
+    res.json({ activeRun: result.rows[0] || null });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── PIPELINE — STATS ──
