@@ -2,13 +2,18 @@
 const { Pool } = require("pg");
 const logger   = require("../logger");
 
-if (!process.env.DATABASE_URL) {
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  "";
+
+if (!connectionString) {
   logger.warn("DATABASE_URL not set — database features will be unavailable");
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("render.com")
+  connectionString,
+  ssl: connectionString.includes("render.com") || connectionString.includes("railway")
     ? { rejectUnauthorized: false }
     : false,
   max: 10,
