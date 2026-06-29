@@ -25,6 +25,7 @@ router.get("/health", async (req, res) => {
   let tables       = [];
   let caseCount    = 0;
   let contactCount = 0;
+  let trusteeCount = 0;
   try {
     const result = await query(`
       SELECT table_name FROM information_schema.tables
@@ -34,12 +35,14 @@ router.get("/health", async (req, res) => {
     dbStatus     = "connected";
     const cc     = await query("SELECT COUNT(*) AS n FROM cases");
     const ct     = await query("SELECT COUNT(*) AS n FROM contacts");
+    const ctr    = await query("SELECT COUNT(*) AS n FROM trustees");
     caseCount    = parseInt(cc.rows[0].n, 10);
     contactCount = parseInt(ct.rows[0].n, 10);
+    trusteeCount = parseInt(ctr.rows[0].n, 10);
   } catch(e) {
     dbStatus = "error: " + e.message;
   }
-  res.json({ status:"ok", database:dbStatus, tables, caseCount, contactCount });
+  res.json({ status:"ok", database:dbStatus, tables, caseCount, contactCount, trusteeCount });
 });
 
 // ── DEBUG ──
@@ -89,24 +92,19 @@ router.get("/debug/cl-search", async (req, res) => {
 // ── COURTLISTENER WEBHOOK RECEIVER ──
 router.post("/webhooks/courtlistener", async (req, res) => {
   res.status(200).json({ received: true });
-
   try {
-    const body        = req.body;
-    const eventType   = body?.webhook?.event_type;
+    const body      = req.body;
+    const eventType = body?.webhook?.event_type;
     const idempotency = req.headers["idempotency-key"] || "";
-
     logger.info(`CL Webhook — event_type: ${eventType} idempotency: ${idempotency}`);
 
     if (eventType === 2) {
       const results = body?.payload?.results || [];
       logger.info(`Search alert webhook: ${results.length} new results`);
-
       for (const hit of results) {
         const docketId = hit.docket_id || hit.id || null;
         if (!docketId) continue;
-
         logger.info(`Webhook processing docket: ${docketId}`);
-
         hydrateDocket(docketId)
           .then(async h => {
             await store.saveHydratedCase(h);
@@ -115,12 +113,10 @@ router.post("/webhooks/courtlistener", async (req, res) => {
           .catch(e => logger.error(`Webhook hydration failed ${docketId}: ${e.message}`));
       }
     }
-
     if (eventType === 1) {
       const results = body?.payload?.results || [];
       logger.info(`Docket alert webhook: ${results.length} new entries`);
     }
-
   } catch(e) {
     logger.error("Webhook processing error:", e.message);
   }
@@ -304,18 +300,14 @@ router.post("/pipeline/cron", async (req, res) => {
 // ── PIPELINE — HISTORY ──
 router.get("/pipeline/runs", async (req, res) => {
   try {
-    const result = await query(
-      `SELECT * FROM automation_runs ORDER BY created_at DESC LIMIT 20`
-    );
+    const result = await query(`SELECT * FROM automation_runs ORDER BY created_at DESC LIMIT 20`);
     res.json({ runs: result.rows });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 router.get("/pipeline/runs/:id", async (req, res) => {
   try {
-    const result = await query(
-      "SELECT * FROM automation_runs WHERE id = $1", [req.params.id]
-    );
+    const result = await query("SELECT * FROM automation_runs WHERE id = $1", [req.params.id]);
     if (!result.rows.length) return res.status(404).json({ error:"Run not found" });
     res.json(result.rows[0]);
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -330,16 +322,13 @@ router.get("/pipeline/reset-stuck", async (req, res) => {
   try {
     const result = await query(`
       UPDATE automation_runs
-      SET status = 'failed',
-          completed_at = NOW(),
+      SET status = 'failed', completed_at = NOW(),
           error_summary = '{"error":"Manually reset via API"}'
-      WHERE status IN ('running', 'queued')
+      WHERE status IN ('running','queued')
       RETURNING id, status, started_at
     `);
     res.json({ message: "Stuck runs cleared", reset: result.rows });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── PIPELINE — CHECK ACTIVE RUN ──
@@ -347,7 +336,7 @@ router.get("/pipeline/active", async (req, res) => {
   try {
     const result = await query(`
       SELECT * FROM automation_runs
-      WHERE status IN ('running', 'queued')
+      WHERE status IN ('running','queued')
       ORDER BY started_at DESC LIMIT 1
     `);
     res.json({ activeRun: result.rows[0] || null });
@@ -357,23 +346,18 @@ router.get("/pipeline/active", async (req, res) => {
 // ── PIPELINE — STATS ──
 router.get("/pipeline/stats", async (req, res) => {
   try {
-    const [casesResult, contactsResult, lastRunResult] = await Promise.all([
+    const [casesResult, contactsResult, lastRunResult, trusteeResult] = await Promise.all([
       query("SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE is_subchapter_v) AS subv FROM cases"),
       query("SELECT contact_type, COUNT(*) FROM contacts GROUP BY contact_type"),
-      query(`SELECT * FROM automation_runs
-             WHERE status IN ('completed','completed_with_errors')
-             ORDER BY completed_at DESC LIMIT 1`),
+      query(`SELECT * FROM automation_runs WHERE status IN ('completed','completed_with_errors') ORDER BY completed_at DESC LIMIT 1`),
+      query("SELECT COUNT(*) AS total FROM trustees WHERE active = TRUE"),
     ]);
     const contactsByType = {};
-    contactsResult.rows.forEach(r => {
-      contactsByType[r.contact_type] = parseInt(r.count, 10);
-    });
+    contactsResult.rows.forEach(r => { contactsByType[r.contact_type] = parseInt(r.count, 10); });
     res.json({
-      cases: {
-        total:       parseInt(casesResult.rows[0].total, 10),
-        subchapterV: parseInt(casesResult.rows[0].subv,  10),
-      },
+      cases:    { total: parseInt(casesResult.rows[0].total, 10), subchapterV: parseInt(casesResult.rows[0].subv, 10) },
       contacts: contactsByType,
+      trustees: parseInt(trusteeResult.rows[0].total, 10),
       lastRun:  lastRunResult.rows[0] || null,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -386,9 +370,7 @@ function csvResponse(res, csv, filename) {
   res.send(csv);
 }
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
-}
+function todayStr() { return new Date().toISOString().slice(0, 10); }
 
 router.get("/exports/list", (req, res) => {
   res.json({
@@ -440,6 +422,85 @@ router.get("/exports/review", async (req, res) => {
     logger.info(`Review CSV: ${rowCount} rows`);
     csvResponse(res, csv, `chapter11ready_needs_review_${todayStr()}.csv`);
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── TRUSTEE IMPORT ──
+router.post("/admin/import-trustees", async (req, res) => {
+  const secret = req.headers["x-cron-secret"] || req.body?.secret || "";
+  if (CRON_SECRET && secret !== CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const trustees = req.body?.trustees;
+  if (!Array.isArray(trustees) || trustees.length === 0) {
+    return res.status(400).json({ error: "trustees array required in request body" });
+  }
+
+  let inserted = 0, updated = 0, errors = [];
+
+  for (const t of trustees) {
+    try {
+      const result = await query(`
+        INSERT INTO trustees (
+          district_code, district_name, full_name, email, phone,
+          contact_type, program_type, appointment_type,
+          source_url, source_verified_at, active,
+          outreach_status, notes, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+        ON CONFLICT (district_code, full_name) DO UPDATE SET
+          district_name      = COALESCE(EXCLUDED.district_name, trustees.district_name),
+          email              = COALESCE(EXCLUDED.email, trustees.email),
+          phone              = COALESCE(EXCLUDED.phone, trustees.phone),
+          source_url         = COALESCE(EXCLUDED.source_url, trustees.source_url),
+          source_verified_at = COALESCE(EXCLUDED.source_verified_at, trustees.source_verified_at),
+          active             = EXCLUDED.active,
+          updated_at         = NOW()
+        RETURNING (xmax = 0) AS is_insert
+      `, [
+        t.district_code,
+        t.district_name || null,
+        t.name || t.full_name,
+        t.email || null,
+        t.phone || null,
+        t.contact_type || "subchapter_v_trustee",
+        t.program_type || "USTP",
+        t.appointment_type || "case_by_case",
+        t.source_url || null,
+        t.source_verified_at || null,
+        t.active !== false,
+        t.outreach_status || "not_contacted",
+        t.notes || null,
+      ]);
+      if (result.rows[0]?.is_insert) inserted++;
+      else updated++;
+    } catch(e) {
+      errors.push({ trustee: t.name || t.full_name, error: e.message });
+    }
+  }
+
+  logger.info(`Trustee import: ${inserted} inserted, ${updated} updated, ${errors.length} errors`);
+  res.json({ inserted, updated, errors, total: trustees.length });
+});
+
+// ── TRUSTEE LOOKUP ──
+router.get("/trustees", async (req, res) => {
+  try {
+    const { district, name } = req.query;
+    let sql = "SELECT * FROM trustees WHERE active = TRUE";
+    const params = [];
+    if (district) {
+      params.push(district.toLowerCase());
+      sql += ` AND district_code = $${params.length}`;
+    }
+    if (name) {
+      params.push(`%${name}%`);
+      sql += ` AND full_name ILIKE $${params.length}`;
+    }
+    sql += " ORDER BY district_code, full_name";
+    const result = await query(sql, params);
+    res.json({ trustees: result.rows, total: result.rows.length });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── LEGACY ──
