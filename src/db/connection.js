@@ -7,7 +7,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
   ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("render.com")
     ? { rejectUnauthorized: false }
     : false,
