@@ -30,7 +30,7 @@ function closeRequest(method, path, body) {
         try {
           const parsed = JSON.parse(data);
           if (resp.statusCode >= 400) {
-            logger.warn(`Close API ${resp.statusCode} ${method} ${path}: ${data.slice(0, 200)}`);
+            logger.warn("Close API " + resp.statusCode + " " + method + " " + path + ": " + data.slice(0, 200));
             resolve({ _error: true, _status: resp.statusCode, _body: parsed });
           } else {
             resolve(parsed);
@@ -57,7 +57,7 @@ const LEAD_STATUS = {
   approvedForOutreach: "stat_PA2y1jrWBTLFO5TTuw0hcG5kyVn1kElTmrsR0QiRlW5",
 };
 
-// ── PIPELINE STATUS IDs ──
+// ── OPPORTUNITY STATUS IDs ──
 const OPPORTUNITY_STATUS = {
   discoveryCallScheduled: "stat_H0XAr39brZTeiJoTKfQ1AHV7F0YX1NsljApuLdEq1V4",
 };
@@ -113,12 +113,12 @@ function buildLeadDescription(c) {
   const filed  = formatPetitionDate(c.petition_date);
   const days   = filed ? daysSince(filed) : null;
 
-  lines.push(`Sub-V Chapter 11 — Case ${c.case_number || "unknown"}`);
-  if (filed)        lines.push(`Filed: ${filed}${days !== null ? ` (Day ${days})` : ""}`);
-  if (c.court_id)   lines.push(`Court: ${c.court_id.toUpperCase()}${c.district ? " — " + c.district : ""}`);
-  if (c.state || STATE_MAP[c.court_id]) lines.push(`State: ${c.state || STATE_MAP[c.court_id] || ""}`);
-  if (c.courtlistener_absolute_url) lines.push(`CourtListener: ${c.courtlistener_absolute_url}`);
-  if (c.assigned_judge) lines.push(`Judge: ${c.assigned_judge}`);
+  lines.push("Sub-V Chapter 11 — Case " + (c.case_number || "unknown"));
+  if (filed)        lines.push("Filed: " + filed + (days !== null ? " (Day " + days + ")" : ""));
+  if (c.court_id)   lines.push("Court: " + c.court_id.toUpperCase() + (c.district ? " — " + c.district : ""));
+  if (c.state || STATE_MAP[c.court_id]) lines.push("State: " + (c.state || STATE_MAP[c.court_id] || ""));
+  if (c.courtlistener_absolute_url) lines.push("CourtListener: " + c.courtlistener_absolute_url);
+  if (c.assigned_judge) lines.push("Judge: " + c.assigned_judge);
 
   return lines.join("\n");
 }
@@ -127,54 +127,55 @@ function buildNoteHtml(c, contacts) {
   const filed = formatPetitionDate(c.petition_date);
   const days  = filed ? daysSince(filed) : null;
 
-  const principals = contacts.filter(x => x.contact_type === "principal");
-  const attorneys  = contacts.filter(x => x.contact_type === "debtor_attorney");
-  const trustees   = contacts.filter(x => x.contact_type === "subchapter_v_trustee");
+  const principals = (contacts || []).filter(function(x) { return x.contact_type === "principal"; });
+  const attorneys  = (contacts || []).filter(function(x) { return x.contact_type === "debtor_attorney"; });
+  const trustees   = (contacts || []).filter(function(x) { return x.contact_type === "subchapter_v_trustee"; });
 
   let html = "<body>";
-  html += `<h2>${c.case_name || c.debtor_name || "Unknown Debtor"}</h2>`;
-  html += `<p><strong>Case No:</strong> ${c.case_number || "—"}</p>`;
-  html += `<p><strong>Filed:</strong> ${filed || "—"}${days !== null ? ` — Day ${days} since filing` : ""}</p>`;
-  html += `<p><strong>Court:</strong> ${(c.court_id || "").toUpperCase()}${c.district ? " — " + c.district : ""}</p>`;
-  if (c.state || STATE_MAP[c.court_id]) {
-    html += `<p><strong>State:</strong> ${c.state || STATE_MAP[c.court_id] || ""}</p>`;
-  }
+  html += "<h2>" + (c.case_name || c.debtor_name || "Unknown Debtor") + "</h2>";
+  html += "<p><strong>Case No:</strong> " + (c.case_number || "—") + "</p>";
+  html += "<p><strong>Filed:</strong> " + (filed || "—") + (days !== null ? " — Day " + days + " since filing" : "") + "</p>";
+  html += "<p><strong>Court:</strong> " + (c.court_id || "").toUpperCase() + (c.district ? " — " + c.district : "") + "</p>";
+
+  const stateStr = c.state || STATE_MAP[c.court_id] || "";
+  if (stateStr) html += "<p><strong>State:</strong> " + stateStr + "</p>";
+
   if (c.courtlistener_absolute_url) {
-    html += `<p><strong>CourtListener:</strong> <a href="${c.courtlistener_absolute_url}">${c.courtlistener_absolute_url}</a></p>`;
+    html += "<p><strong>CourtListener:</strong> <a href=\"" + c.courtlistener_absolute_url + "\">" + c.courtlistener_absolute_url + "</a></p>";
   }
   if (c.subchapterv_confidence) {
-    html += `<p><strong>Sub-V Confidence:</strong> ${c.subchapterv_confidence}</p>`;
+    html += "<p><strong>Sub-V Confidence:</strong> " + c.subchapterv_confidence + "</p>";
   }
 
   if (principals.length) {
     html += "<hr/><h3>Principal / Owner</h3>";
     principals.forEach(function(p) {
-      html += `<p><strong>${p.full_name || "Unknown"}</strong>`;
-      if (p.title) html += ` — ${p.title}`;
+      html += "<p><strong>" + (p.full_name || "Unknown") + "</strong>";
+      if (p.title) html += " — " + p.title;
       html += "</p>";
-      if (p.email)   html += `<p>Email: ${p.email}</p>`;
-      if (p.phone)   html += `<p>Phone: ${p.phone}</p>`;
-      if (p.source)  html += `<p><em>Source: ${p.source} — verify before outreach</em></p>`;
+      if (p.email) html += "<p>Email: " + p.email + "</p>";
+      if (p.phone) html += "<p>Phone: " + p.phone + "</p>";
+      if (p.source) html += "<p><em>Source: " + p.source + " — verify before outreach</em></p>";
     });
   }
 
   if (attorneys.length) {
     html += "<hr/><h3>Debtor Attorney</h3>";
     attorneys.forEach(function(a) {
-      html += `<p><strong>${a.full_name || "Unknown"}</strong>`;
-      if (a.organization_name) html += ` — ${a.organization_name}`;
+      html += "<p><strong>" + (a.full_name || "Unknown") + "</strong>";
+      if (a.organization_name) html += " — " + a.organization_name;
       html += "</p>";
-      if (a.email) html += `<p>Email: ${a.email}</p>`;
-      if (a.phone) html += `<p>Phone: ${a.phone}</p>`;
+      if (a.email) html += "<p>Email: " + a.email + "</p>";
+      if (a.phone) html += "<p>Phone: " + a.phone + "</p>";
     });
   }
 
   if (trustees.length) {
     html += "<hr/><h3>Sub-V Trustee</h3>";
     trustees.forEach(function(t) {
-      html += `<p><strong>${t.full_name || "Unknown"}</strong></p>`;
-      if (t.email) html += `<p>Email: ${t.email}</p>`;
-      if (t.phone) html += `<p>Phone: ${t.phone}</p>`;
+      html += "<p><strong>" + (t.full_name || "Unknown") + "</strong></p>";
+      if (t.email) html += "<p>Email: " + t.email + "</p>";
+      if (t.phone) html += "<p>Phone: " + t.phone + "</p>";
     });
   }
 
@@ -186,12 +187,12 @@ function buildNoteHtml(c, contacts) {
 async function findExistingLead(caseNumber) {
   if (!caseNumber) return null;
   try {
-    const result = await closeRequest("GET", `/lead/?query=${encodeURIComponent(caseNumber)}&_fields=id,display_name`);
+    const result = await closeRequest("GET", "/lead/?query=" + encodeURIComponent(caseNumber) + "&_fields=id,display_name");
     if (result._error) return null;
     const leads = result.data || [];
     return leads.length > 0 ? leads[0] : null;
   } catch(e) {
-    logger.warn(`Close lead search failed for ${caseNumber}: ${e.message}`);
+    logger.warn("Close lead search failed for " + caseNumber + ": " + e.message);
     return null;
   }
 }
@@ -204,16 +205,12 @@ async function createLead(c) {
     description: buildLeadDescription(c),
     status_id:   LEAD_STATUS.newNeedsReview,
     url:         c.website || null,
-    addresses: c.address ? [{
-      label:   "business",
-      address: c.address,
-    }] : [],
-    custom: {},
+    custom:      {},
   };
 
   const result = await closeRequest("POST", "/lead/", payload);
   if (result._error) {
-    throw new Error(`Failed to create lead for ${name}: ${JSON.stringify(result._body).slice(0, 200)}`);
+    throw new Error("Failed to create lead for " + name + ": " + JSON.stringify(result._body).slice(0, 200));
   }
   return result;
 }
@@ -224,26 +221,21 @@ async function createContact(leadId, contact) {
   if (!name) return null;
 
   const phones = [];
-  if (contact.phone) {
-    phones.push({ phone: contact.phone, type: "office" });
-  }
+  if (contact.phone) phones.push({ phone: contact.phone, type: "office" });
 
   const emails = [];
-  if (contact.email) {
-    emails.push({ email: contact.email, type: "office" });
-  }
+  if (contact.email) emails.push({ email: contact.email, type: "office" });
 
-  const payload = {
+  const result = await closeRequest("POST", "/contact/", {
     lead_id: leadId,
     name:    name,
     title:   contact.title || contact.contact_type || null,
     phones:  phones,
     emails:  emails,
-  };
+  });
 
-  const result = await closeRequest("POST", "/contact/", payload);
   if (result._error) {
-    logger.warn(`Failed to create contact ${name}: ${JSON.stringify(result._body).slice(0, 200)}`);
+    logger.warn("Failed to create contact " + name + ": " + JSON.stringify(result._body).slice(0, 200));
     return null;
   }
   return result;
@@ -252,12 +244,12 @@ async function createContact(leadId, contact) {
 // ── CREATE NOTE ──
 async function createNote(leadId, noteHtml) {
   const result = await closeRequest("POST", "/activity/note/", {
-    lead_id:    leadId,
-    note_html:  noteHtml,
-    _type:      "Note",
+    lead_id:   leadId,
+    note_html: noteHtml,
+    _type:     "Note",
   });
   if (result._error) {
-    logger.warn(`Failed to create note for lead ${leadId}`);
+    logger.warn("Failed to create note for lead " + leadId);
     return null;
   }
   return result;
@@ -267,10 +259,10 @@ async function createNote(leadId, noteHtml) {
 async function createOpportunity(leadId, c) {
   const filed = formatPetitionDate(c.petition_date);
   const note  = [
-    `Sub-V MOR automation — $200/month`,
-    filed ? `Filed: ${filed}` : null,
-    c.case_number ? `Case: ${c.case_number}` : null,
-    `Court: ${(c.court_id || "").toUpperCase()}`,
+    "Sub-V MOR automation — $200/month",
+    filed ? "Filed: " + filed : null,
+    c.case_number ? "Case: " + c.case_number : null,
+    "Court: " + (c.court_id || "").toUpperCase(),
   ].filter(Boolean).join(" · ");
 
   const result = await closeRequest("POST", "/opportunity/", {
@@ -283,10 +275,32 @@ async function createOpportunity(leadId, c) {
   });
 
   if (result._error) {
-    logger.warn(`Failed to create opportunity for lead ${leadId}`);
+    logger.warn("Failed to create opportunity for lead " + leadId);
     return null;
   }
   return result;
+}
+
+// ── FETCH CONTACTS FOR A CASE FROM DB ──
+async function getContactsForCase(caseDbId, dbQuery) {
+  if (!caseDbId || !dbQuery) return [];
+  try {
+    const result = await dbQuery(
+      `SELECT ct.full_name, ct.title, ct.contact_type,
+              ct.primary_email, ct.primary_phone,
+              o.organization_name
+       FROM case_contacts cc
+       JOIN contacts ct ON ct.id = cc.contact_id
+       LEFT JOIN organizations o ON o.id = ct.organization_id
+       WHERE cc.case_id = $1
+       ORDER BY cc.is_primary DESC, ct.contact_type`,
+      [caseDbId]
+    );
+    return result.rows;
+  } catch(e) {
+    logger.warn("Could not fetch contacts for case " + caseDbId + ": " + e.message);
+    return [];
+  }
 }
 
 // ── MAIN EXPORT — push one case to Close ──
@@ -300,45 +314,46 @@ async function pushCaseToClose(caseRow, contacts) {
   const caseName   = caseRow.case_name || caseRow.debtor_name || "Unknown";
 
   try {
-    // 1. Check for duplicate
+    if (!caseRow.is_subchapter_v) {
+      logger.info("Close: skipping non-Sub-V case " + caseName);
+      return { skipped: true, reason: "not_subchapter_v" };
+    }
+
     const existing = await findExistingLead(caseNumber);
     if (existing) {
-      logger.info(`Close: lead already exists for ${caseNumber} — skipping`);
+      logger.info("Close: lead already exists for " + caseNumber + " — skipping");
       return { skipped: true, reason: "duplicate", leadId: existing.id };
     }
 
-    // 2. Create lead
-    const lead = await createLead(caseRow);
+    const lead   = await createLead(caseRow);
     const leadId = lead.id;
-    logger.info(`Close: created lead ${leadId} for ${caseName}`);
+    logger.info("Close: created lead " + leadId + " for " + caseName);
 
-    // 3. Create contacts — principals first, then attorneys
-    const principals = (contacts || []).filter(c => c.contact_type === "principal");
-    const attorneys  = (contacts || []).filter(c => c.contact_type === "debtor_attorney");
-    const trustees   = (contacts || []).filter(c => c.contact_type === "subchapter_v_trustee");
+    const principals = (contacts || []).filter(function(c) { return c.contact_type === "principal"; });
+    const attorneys  = (contacts || []).filter(function(c) { return c.contact_type === "debtor_attorney"; });
+    const trustees   = (contacts || []).filter(function(c) { return c.contact_type === "subchapter_v_trustee"; });
+    const allContacts = principals.concat(attorneys).concat(trustees);
 
-    const allContacts = [...principals, ...attorneys, ...trustees];
     for (const contact of allContacts.slice(0, 5)) {
+      await new Promise(function(r) { setTimeout(r, 150); });
       await createContact(leadId, contact);
     }
 
-    // 4. Create pinned note with full case summary
     const noteHtml = buildNoteHtml(caseRow, contacts || []);
     await createNote(leadId, noteHtml);
 
-    // 5. Create opportunity
     await createOpportunity(leadId, caseRow);
 
-    logger.info(`Close: fully created lead for ${caseName} (${caseNumber})`);
+    logger.info("Close: fully created lead for " + caseName + " (" + caseNumber + ")");
     return { success: true, leadId, caseName, caseNumber };
 
   } catch(e) {
-    logger.error(`Close push failed for ${caseName}: ${e.message}`);
+    logger.error("Close push failed for " + caseName + ": " + e.message);
     return { error: true, message: e.message, caseName, caseNumber };
   }
 }
 
-// ── BATCH PUSH — push multiple cases ──
+// ── BATCH PUSH ──
 async function pushCasesToClose(cases) {
   if (!CLOSE_API_KEY) {
     logger.warn("CLOSE_API_KEY not set — skipping Close batch push");
@@ -348,19 +363,16 @@ async function pushCasesToClose(cases) {
   const results = { pushed: 0, skipped: 0, errors: 0, details: [] };
 
   for (const item of cases) {
-    // Respect Close API rate limits — 100 req/10s
-    await new Promise(r => setTimeout(r, 300));
-
+    await new Promise(function(r) { setTimeout(r, 400); });
     const result = await pushCaseToClose(item.case, item.contacts || []);
     results.details.push(result);
-
-    if (result.success)  results.pushed++;
-    else if (result.skipped) results.skipped++;
-    else                 results.errors++;
+    if (result.success)       results.pushed++;
+    else if (result.skipped)  results.skipped++;
+    else                      results.errors++;
   }
 
-  logger.info(`Close batch push complete: ${results.pushed} pushed, ${results.skipped} skipped, ${results.errors} errors`);
+  logger.info("Close batch complete: " + results.pushed + " pushed, " + results.skipped + " skipped, " + results.errors + " errors");
   return results;
 }
 
-module.exports = { pushCaseToClose, pushCasesToClose };
+module.exports = { pushCaseToClose, pushCasesToClose, getContactsForCase };
