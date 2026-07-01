@@ -51,10 +51,9 @@ function closeRequest(method, path, body) {
   });
 }
 
-// ── LEAD STATUS IDs — from your Close account ──
+// ── LEAD STATUS IDs ──
 const LEAD_STATUS = {
-  newNeedsReview:      "stat_KnhQmcVJLP0nSs8wdYqGxcW7hpe0Ey4h5ecIzfarMcK",
-  approvedForOutreach: "stat_PA2y1jrWBTLFO5TTuw0hcG5kyVn1kElTmrsR0QiRlW5",
+  newNeedsReview: "stat_KnhQmcVJLP0nSs8wdYqGxcW7hpe0Ey4h5ecIzfarMcK",
 };
 
 // ── OPPORTUNITY STATUS IDs ──
@@ -96,6 +95,80 @@ const STATE_MAP = {
   okeb:"Oklahoma",oknb:"Oklahoma",okwb:"Oklahoma",
 };
 
+// ── FILTER PATTERNS ──
+
+const BAD_NAME_PATTERNS = [
+  /^unknown debtor/i,
+  /^and the case number/i,
+  /official form/i,
+  /pursuant to/i,
+  /of the united states/i,
+  /bankruptcy code/i,
+  /subchapter v election/i,
+  /voluntary petition/i,
+  /^in re:/i,
+  /^case number/i,
+  /^docket number/i,
+];
+
+const US_TRUSTEE_PATTERNS = [
+  /u\.?s\.?\s*trustee/i,
+  /united states trustee/i,
+  /office of the.*trustee/i,
+  /department of justice/i,
+  /u\.s\. department/i,
+];
+
+const BAD_TITLE_PATTERNS = [
+  /of the united states code/i,
+  /bankruptcy code/i,
+  /pursuant to/i,
+  /official form/i,
+  /in accordance with/i,
+  /11 u\.s\.c/i,
+  /section \d+/i,
+  /title 11/i,
+];
+
+function isValidLeadName(name) {
+  if (!name || name.trim().length < 3) return false;
+  for (const pattern of BAD_NAME_PATTERNS) {
+    if (pattern.test(name)) return false;
+  }
+  return true;
+}
+
+function isUSTrusteeContact(contact) {
+  const name = (contact.full_name || "").toLowerCase();
+  const org  = (contact.organization_name || "").toLowerCase();
+  for (const pattern of US_TRUSTEE_PATTERNS) {
+    if (pattern.test(name) || pattern.test(org)) return true;
+  }
+  return false;
+}
+
+function isValidTitle(title) {
+  if (!title) return true;
+  for (const pattern of BAD_TITLE_PATTERNS) {
+    if (pattern.test(title)) return false;
+  }
+  return true;
+}
+
+function isPrincipalActuallyAttorney(principal, attorneys) {
+  const principalName = (principal.full_name || "").toLowerCase().trim();
+  if (!principalName) return false;
+  for (const a of attorneys) {
+    const attorneyName = (a.full_name || "").toLowerCase().trim();
+    if (attorneyName && (
+      attorneyName === principalName ||
+      attorneyName.includes(principalName) ||
+      principalName.includes(attorneyName)
+    )) return true;
+  }
+  return false;
+}
+
 // ── HELPERS ──
 function daysSince(dateStr) {
   if (!dateStr) return null;
@@ -110,8 +183,8 @@ function formatPetitionDate(dateStr) {
 
 function buildLeadDescription(c) {
   const lines = [];
-  const filed  = formatPetitionDate(c.petition_date);
-  const days   = filed ? daysSince(filed) : null;
+  const filed = formatPetitionDate(c.petition_date);
+  const days  = filed ? daysSince(filed) : null;
 
   lines.push("Sub-V Chapter 11 — Case " + (c.case_number || "unknown"));
   if (filed)        lines.push("Filed: " + filed + (days !== null ? " (Day " + days + ")" : ""));
@@ -127,9 +200,17 @@ function buildNoteHtml(c, contacts) {
   const filed = formatPetitionDate(c.petition_date);
   const days  = filed ? daysSince(filed) : null;
 
-  const principals = (contacts || []).filter(function(x) { return x.contact_type === "principal"; });
-  const attorneys  = (contacts || []).filter(function(x) { return x.contact_type === "debtor_attorney"; });
-  const trustees   = (contacts || []).filter(function(x) { return x.contact_type === "subchapter_v_trustee"; });
+  const attorneys = (contacts || []).filter(function(x) {
+    return x.contact_type === "debtor_attorney" && !isUSTrusteeContact(x);
+  });
+  const principals = (contacts || []).filter(function(x) {
+    return x.contact_type === "principal" &&
+           !isPrincipalActuallyAttorney(x, attorneys) &&
+           isValidTitle(x.title);
+  });
+  const trustees = (contacts || []).filter(function(x) {
+    return x.contact_type === "subchapter_v_trustee";
+  });
 
   let html = "<body>";
   html += "<h2>" + (c.case_name || c.debtor_name || "Unknown Debtor") + "</h2>";
@@ -151,12 +232,13 @@ function buildNoteHtml(c, contacts) {
     html += "<hr/><h3>Principal / Owner</h3>";
     principals.forEach(function(p) {
       html += "<p><strong>" + (p.full_name || "Unknown") + "</strong>";
-      if (p.title) html += " — " + p.title;
+      if (p.title && isValidTitle(p.title)) html += " — " + p.title;
       html += "</p>";
-      if (p.email) html += "<p>Email: " + p.email + "</p>";
-      if (p.phone) html += "<p>Phone: " + p.phone + "</p>";
-      if (p.source) html += "<p><em>Source: " + p.source + " — verify before outreach</em></p>";
+      if (p.primary_email) html += "<p>Email: " + p.primary_email + "</p>";
+      if (p.primary_phone) html += "<p>Phone: " + p.primary_phone + "</p>";
     });
+  } else {
+    html += "<hr/><h3>Principal / Owner</h3><p><em>Not identified — manual review recommended.</em></p>";
   }
 
   if (attorneys.length) {
@@ -165,8 +247,8 @@ function buildNoteHtml(c, contacts) {
       html += "<p><strong>" + (a.full_name || "Unknown") + "</strong>";
       if (a.organization_name) html += " — " + a.organization_name;
       html += "</p>";
-      if (a.email) html += "<p>Email: " + a.email + "</p>";
-      if (a.phone) html += "<p>Phone: " + a.phone + "</p>";
+      if (a.primary_email) html += "<p>Email: " + a.primary_email + "</p>";
+      if (a.primary_phone) html += "<p>Phone: " + a.primary_phone + "</p>";
     });
   }
 
@@ -174,8 +256,8 @@ function buildNoteHtml(c, contacts) {
     html += "<hr/><h3>Sub-V Trustee</h3>";
     trustees.forEach(function(t) {
       html += "<p><strong>" + (t.full_name || "Unknown") + "</strong></p>";
-      if (t.email) html += "<p>Email: " + t.email + "</p>";
-      if (t.phone) html += "<p>Phone: " + t.phone + "</p>";
+      if (t.primary_email) html += "<p>Email: " + t.primary_email + "</p>";
+      if (t.primary_phone) html += "<p>Phone: " + t.primary_phone + "</p>";
     });
   }
 
@@ -200,15 +282,13 @@ async function findExistingLead(caseNumber) {
 // ── CREATE LEAD ──
 async function createLead(c) {
   const name = c.case_name || c.debtor_name || "Unknown Debtor";
-  const payload = {
+  const result = await closeRequest("POST", "/lead/", {
     name:        name,
     description: buildLeadDescription(c),
     status_id:   LEAD_STATUS.newNeedsReview,
     url:         c.website || null,
     custom:      {},
-  };
-
-  const result = await closeRequest("POST", "/lead/", payload);
+  });
   if (result._error) {
     throw new Error("Failed to create lead for " + name + ": " + JSON.stringify(result._body).slice(0, 200));
   }
@@ -221,15 +301,19 @@ async function createContact(leadId, contact) {
   if (!name) return null;
 
   const phones = [];
-  if (contact.phone) phones.push({ phone: contact.phone, type: "office" });
+  if (contact.primary_phone) phones.push({ phone: contact.primary_phone, type: "office" });
 
   const emails = [];
-  if (contact.email) emails.push({ email: contact.email, type: "office" });
+  if (contact.primary_email) emails.push({ email: contact.primary_email, type: "office" });
+
+  const title = isValidTitle(contact.title)
+    ? (contact.title || contact.contact_type || null)
+    : (contact.contact_type || null);
 
   const result = await closeRequest("POST", "/contact/", {
     lead_id: leadId,
     name:    name,
-    title:   contact.title || contact.contact_type || null,
+    title:   title,
     phones:  phones,
     emails:  emails,
   });
@@ -303,7 +387,7 @@ async function getContactsForCase(caseDbId, dbQuery) {
   }
 }
 
-// ── MAIN EXPORT — push one case to Close ──
+// ── MAIN — push one case to Close ──
 async function pushCaseToClose(caseRow, contacts) {
   if (!CLOSE_API_KEY) {
     logger.warn("CLOSE_API_KEY not set — skipping Close integration");
@@ -311,27 +395,45 @@ async function pushCaseToClose(caseRow, contacts) {
   }
 
   const caseNumber = caseRow.case_number || "";
-  const caseName   = caseRow.case_name || caseRow.debtor_name || "Unknown";
+  const caseName   = caseRow.case_name   || caseRow.debtor_name || "";
+
+  // Skip non-Sub-V
+  if (!caseRow.is_subchapter_v) {
+    logger.info("Close: skipping non-Sub-V case " + caseName);
+    return { skipped: true, reason: "not_subchapter_v" };
+  }
+
+  // Skip bad names
+  if (!isValidLeadName(caseName)) {
+    logger.warn("Close: skipping lead with invalid name: '" + caseName + "'");
+    return { skipped: true, reason: "invalid_name", caseName };
+  }
+
+  // Skip duplicates
+  const existing = await findExistingLead(caseNumber);
+  if (existing) {
+    logger.info("Close: lead already exists for " + caseNumber + " — skipping");
+    return { skipped: true, reason: "duplicate", leadId: existing.id };
+  }
 
   try {
-    if (!caseRow.is_subchapter_v) {
-      logger.info("Close: skipping non-Sub-V case " + caseName);
-      return { skipped: true, reason: "not_subchapter_v" };
-    }
-
-    const existing = await findExistingLead(caseNumber);
-    if (existing) {
-      logger.info("Close: lead already exists for " + caseNumber + " — skipping");
-      return { skipped: true, reason: "duplicate", leadId: existing.id };
-    }
-
     const lead   = await createLead(caseRow);
     const leadId = lead.id;
     logger.info("Close: created lead " + leadId + " for " + caseName);
 
-    const principals = (contacts || []).filter(function(c) { return c.contact_type === "principal"; });
-    const attorneys  = (contacts || []).filter(function(c) { return c.contact_type === "debtor_attorney"; });
-    const trustees   = (contacts || []).filter(function(c) { return c.contact_type === "subchapter_v_trustee"; });
+    // Filter contacts
+    const attorneys = (contacts || []).filter(function(c) {
+      return c.contact_type === "debtor_attorney" && !isUSTrusteeContact(c);
+    });
+    const principals = (contacts || []).filter(function(c) {
+      return c.contact_type === "principal" &&
+             !isPrincipalActuallyAttorney(c, attorneys) &&
+             isValidTitle(c.title);
+    });
+    const trustees = (contacts || []).filter(function(c) {
+      return c.contact_type === "subchapter_v_trustee";
+    });
+
     const allContacts = principals.concat(attorneys).concat(trustees);
 
     for (const contact of allContacts.slice(0, 5)) {
@@ -341,7 +443,6 @@ async function pushCaseToClose(caseRow, contacts) {
 
     const noteHtml = buildNoteHtml(caseRow, contacts || []);
     await createNote(leadId, noteHtml);
-
     await createOpportunity(leadId, caseRow);
 
     logger.info("Close: fully created lead for " + caseName + " (" + caseNumber + ")");
@@ -366,9 +467,9 @@ async function pushCasesToClose(cases) {
     await new Promise(function(r) { setTimeout(r, 400); });
     const result = await pushCaseToClose(item.case, item.contacts || []);
     results.details.push(result);
-    if (result.success)       results.pushed++;
-    else if (result.skipped)  results.skipped++;
-    else                      results.errors++;
+    if (result.success)      results.pushed++;
+    else if (result.skipped) results.skipped++;
+    else                     results.errors++;
   }
 
   logger.info("Close batch complete: " + results.pushed + " pushed, " + results.skipped + " skipped, " + results.errors + " errors");
