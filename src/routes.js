@@ -16,7 +16,7 @@ const logger                       = require("./logger");
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
-router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept"] }));
+router.use(cors({ origin:"*", methods:["GET","POST","OPTIONS"], allowedHeaders:["Content-Type","Authorization","Accept","x-cron-secret"] }));
 router.options("*", cors());
 
 // ── HEALTH ──
@@ -197,7 +197,6 @@ router.get("/cases/:docketId/enrich", async (req, res) => {
       await store.saveHydratedCase(c);
     }
 
-    // Map database snake_case fields to enrichment service camelCase format
     if (c && !c.debtorName) {
       c = {
         ...c,
@@ -456,16 +455,13 @@ router.post("/admin/import-trustees", async (req, res) => {
           updated_at         = NOW()
         RETURNING (xmax = 0) AS is_insert
       `, [
-        t.district_code,
-        t.district_name || null,
+        t.district_code, t.district_name || null,
         t.name || t.full_name,
-        t.email || null,
-        t.phone || null,
+        t.email || null, t.phone || null,
         t.contact_type || "subchapter_v_trustee",
         t.program_type || "USTP",
         t.appointment_type || "case_by_case",
-        t.source_url || null,
-        t.source_verified_at || null,
+        t.source_url || null, t.source_verified_at || null,
         t.active !== false,
         t.outreach_status || "not_contacted",
         t.notes || null,
@@ -499,6 +495,99 @@ router.get("/trustees", async (req, res) => {
     const result = await query(sql, params);
     res.json({ trustees: result.rows, total: result.rows.length });
   } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── CLOSE BACKFILL ──
+// Pushes existing confirmed Sub-V cases from the database to Close CRM.
+// Use limit and offset to process in small batches.
+// Safe to run multiple times — duplicate check prevents re-creating existing leads.
+router.get("/admin/close-backfill", async (req, res) => {
+  const secret = req.query.secret || "";
+  if (CRON_SECRET && secret !== CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { pushCaseToClose, getContactsForCase } = require("./integrations/closeIntegration");
+  const limit  = Math.min(parseInt(req.query.limit  || "10", 10), 30);
+  const offset = parseInt(req.query.offset || "0", 10);
+
+  // Optional date filters so you can target a specific filing window
+  const fromDate = req.query.fromDate || null;
+  const toDate   = req.query.toDate   || null;
+
+  try {
+    let sql = `
+      SELECT * FROM cases
+      WHERE is_subchapter_v = TRUE
+        AND case_name IS NOT NULL
+        AND LENGTH(TRIM(case_name)) > 3
+        AND case_name NOT ILIKE '%unknown debtor%'
+        AND case_name NOT ILIKE '%and the case number%'
+        AND case_name NOT ILIKE '%official form%'
+        AND case_name NOT ILIKE '%voluntary petition%'
+    `;
+    const params = [];
+
+    if (fromDate) {
+      params.push(fromDate);
+      sql += ` AND petition_date >= $${params.length}`;
+    }
+    if (toDate) {
+      params.push(toDate);
+      sql += ` AND petition_date <= $${params.length}`;
+    }
+
+    sql += ` ORDER BY petition_date DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const result = await query(sql, params);
+    const cases  = result.rows;
+
+    logger.info(`Close backfill: ${cases.length} cases to process (limit ${limit} offset ${offset})`);
+
+    // Return immediately so the request doesn't time out
+    res.json({
+      status:    "started",
+      total:     cases.length,
+      limit,
+      offset,
+      fromDate:  fromDate || "any",
+      toDate:    toDate   || "any",
+      message:   "Processing in background — check server logs for progress",
+    });
+
+    // Process in background
+    (async function() {
+      const stats = { pushed: 0, skipped: 0, errors: 0 };
+      for (const c of cases) {
+        await new Promise(function(r) { setTimeout(r, 500); });
+        try {
+          const contacts   = await getContactsForCase(c.id, query);
+          const pushResult = await pushCaseToClose(c, contacts);
+          if (pushResult.success)       stats.pushed++;
+          else if (pushResult.skipped)  stats.skipped++;
+          else                          stats.errors++;
+          logger.info(
+            "Close backfill: " + (c.case_name || c.case_number) +
+            " — " + (pushResult.success ? "pushed ✓" :
+                     pushResult.skipped  ? "skipped (" + pushResult.reason + ")" :
+                     "ERROR: " + pushResult.message)
+          );
+        } catch(e) {
+          stats.errors++;
+          logger.error("Close backfill error for " + c.case_name + ": " + e.message);
+        }
+      }
+      logger.info(
+        "Close backfill complete: " + stats.pushed + " pushed, " +
+        stats.skipped + " skipped, " + stats.errors + " errors"
+      );
+    })();
+
+  } catch(e) {
+    logger.error("Close backfill setup error: " + e.message);
     res.status(500).json({ error: e.message });
   }
 });
