@@ -26,9 +26,10 @@ const logger = require("../logger");
 const CLOSE_API_KEY = process.env.CLOSE_API_KEY || "";
 const CLOSE_BASE    = "api.close.com";
 
-// ── UPDATE THIS once you create "Trustee — New" status in Close Settings → Lead Statuses ──
-// For now uses "New — Needs Review" as placeholder
-const TRUSTEE_STATUS_ID = process.env.CLOSE_TRUSTEE_STATUS_ID || "stat_KnhQmcVJLP0nSs8wdYqGxcW7hpe0Ey4h5ecIzfarMcK";
+// Close lead status IDs for trustee leads
+const TRUSTEE_STATUS_NEW     = "stat_Y83KxPBl2Hxb8epPr6HdXQqKmjPfrMeVq2L1ud1qgO8"; // Trustee — New
+const TRUSTEE_STATUS_PARTNER = "stat_HkVvRUceGBcA53hlU89V1psDhrGhzb8zOfjBL4rkv6t";  // Trustee — Partner
+const TRUSTEE_STATUS_ID      = process.env.CLOSE_TRUSTEE_STATUS_ID || TRUSTEE_STATUS_NEW;
 
 // ── HTTP ──
 function closeRequest(method, path, body) {
