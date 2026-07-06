@@ -12,7 +12,7 @@ const logger                                          = require("../logger");
 
 const LOOKBACK_DAYS  = parseInt(process.env.DAILY_SEARCH_LOOKBACK_DAYS || "3", 10);
 const MAX_CASES      = parseInt(process.env.DAILY_SEARCH_MAX_CASES     || "30", 10);
-const MAX_ENRICHMENTS = parseInt(process.env.DAILY_ENRICH_MAX          || "5",  10);
+const MAX_ENRICHMENTS = parseInt(process.env.DAILY_ENRICH_MAX || "2", 10);
 const PUSH_TO_CLOSE  = process.env.PUSH_TO_CLOSE !== "false";
 
 function getDateString(date) {
