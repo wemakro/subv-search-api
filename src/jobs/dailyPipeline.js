@@ -385,7 +385,7 @@ async function runDailyPipeline(opts) {
       }
 
       // Respect CourtListener rate limits between hydrations
-      await new Promise(function(r) { setTimeout(r, 2000); });
+      await new Promise(function(r) { setTimeout(r, 5000); });
     }
 
     // ── PUSH NEW CASES TO CLOSE ──
