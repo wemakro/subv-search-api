@@ -101,13 +101,42 @@ function guessEmails(name, domain) {
 
 function parseJsonFromText(text) {
   if (!text) return null;
-  try { return JSON.parse(text.trim()); } catch(e) {}
-  var clean = text.replace(/```json\s*/gi,"").replace(/```\s*/g,"").trim();
-  var match = clean.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  try { return JSON.parse(match[0]); } catch(e) { return null; }
-}
 
+  // Try direct parse first (clean JSON with no backticks)
+  try { return JSON.parse(text.trim()); } catch(e) {}
+
+  // Strip markdown backticks Gemini wraps the response in
+  var clean = text
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+
+  // Try again after stripping
+  try { return JSON.parse(clean); } catch(e) {}
+
+  // Brace-count to extract the first complete JSON object.
+  // The greedy regex approach fails when Gemini appends citation
+  // text containing curly braces after the closing brace of the
+  // JSON — the regex matches to the LAST } in the string instead
+  // of the correct one, producing invalid JSON that fails to parse.
+  var start = clean.indexOf("{");
+  if (start === -1) return null;
+
+  var depth = 0;
+  for (var i = start; i < clean.length; i++) {
+    if (clean[i] === "{") {
+      depth++;
+    } else if (clean[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        var candidate = clean.slice(start, i + 1);
+        try { return JSON.parse(candidate); } catch(e) { return null; }
+      }
+    }
+  }
+
+  return null;
+}
 function buildGeminiPrompt(caseData, debtorName) {
   var knownData = {
     docketId:     caseData.docketId,
