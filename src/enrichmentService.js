@@ -99,10 +99,15 @@ function guessEmails(name, domain) {
   ];
 }
 
+// ── FIX: Brace-counting JSON extractor ──
+// The previous greedy regex /\{[\s\S]*\}/ matched from the first { to the
+// LAST } in the string. Gemini appends citation text with curly braces after
+// the JSON object, so the regex overshot and produced invalid JSON.
+// Brace-counting finds exactly the first complete JSON object and stops there.
 function parseJsonFromText(text) {
   if (!text) return null;
 
-  // Try direct parse first (clean JSON with no backticks)
+  // Try direct parse first (clean response with no backticks)
   try { return JSON.parse(text.trim()); } catch(e) {}
 
   // Strip markdown backticks Gemini wraps the response in
@@ -114,11 +119,7 @@ function parseJsonFromText(text) {
   // Try again after stripping
   try { return JSON.parse(clean); } catch(e) {}
 
-  // Brace-count to extract the first complete JSON object.
-  // The greedy regex approach fails when Gemini appends citation
-  // text containing curly braces after the closing brace of the
-  // JSON — the regex matches to the LAST } in the string instead
-  // of the correct one, producing invalid JSON that fails to parse.
+  // Brace-count to extract the first complete JSON object
   var start = clean.indexOf("{");
   if (start === -1) return null;
 
@@ -137,6 +138,7 @@ function parseJsonFromText(text) {
 
   return null;
 }
+
 function buildGeminiPrompt(caseData, debtorName) {
   var knownData = {
     docketId:     caseData.docketId,
@@ -278,7 +280,7 @@ async function aiSearchEnrich(caseData, debtorName) {
     text = await callOpenAI(prompt);
   }
   var result = parseJsonFromText(text);
-  if (!result) logger.warn("AI parse failed for: " + debtorName + " | raw: " + String(text||"").slice(0, 500));
+  if (!result) logger.warn("AI parse failed for: " + debtorName + " | raw: " + String(text||"").slice(0, 200));
   return result;
 }
 
@@ -301,60 +303,103 @@ async function googlePlaces(name, state) {
   } catch(e) { logger.warn("Google Places error: "+e.message); return null; }
 }
 
+// ── FIX: scrapeWebsite now extracts social links, contact form URL, and
+// guesses info@ from the domain as a reliable starting email ──
 async function scrapeWebsite(url) {
-  if (!url) return { emails:[], phones:[], ownerHints:[] };
-  var result = { emails:[], phones:[], contactPageUrl: null, ownerHints:[] };
+  if (!url) return { emails:[], phones:[], ownerHints:[], socialLinks:{}, contactFormUrl:null };
+  var result = { emails:[], phones:[], contactPageUrl:null, ownerHints:[], socialLinks:{}, contactFormUrl:null };
+
+  // Guess info@ from domain as a starting point — usually works
+  try {
+    var domain = new URL(url).hostname.replace(/^www\./, "");
+    if (domain && domain.length <= 40) {
+      result.emails.push("info@" + domain);
+    }
+  } catch(e) {}
+
   try {
     var home = await fetchUrl(url, { timeout: 8000 });
-    result.emails = extractEmails(home.body);
-    result.phones = extractPhones(stripHtml(home.body));
+    var homeText = stripHtml(home.body);
+
+    // Emails and phones from homepage
+    var scrapedEmails = extractEmails(home.body);
+    scrapedEmails.forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+    result.phones = extractPhones(homeText);
+
+    // Social media links
+    var socialPatterns = {
+      instagram: /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9._]{2,30})/i,
+      facebook:  /(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?!sharer|share|dialog)([a-zA-Z0-9._\-]{2,50})/i,
+      twitter:   /(?:https?:\/\/)?(?:www\.)?(?:twitter|x)\.com\/([a-zA-Z0-9._]{2,30})/i,
+      linkedin:  /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:company|in)\/([a-zA-Z0-9._\-]{2,50})/i,
+    };
+    Object.keys(socialPatterns).forEach(function(platform) {
+      var match = home.body.match(socialPatterns[platform]);
+      if (match && match[0]) {
+        var link = match[0];
+        if (!link.startsWith("http")) link = "https://" + link.replace(/^\/\//, "");
+        result.socialLinks[platform] = link;
+      }
+    });
+
+    // Contact page detection
+    var cfMatch = home.body.match(/href=["']([^"']*(?:contact|reach-us|get-in-touch|connect)[^"']*)/i);
+    if (cfMatch) {
+      var cfUrl = cfMatch[1];
+      if (cfUrl.startsWith("/")) { try { var b = new URL(url); cfUrl = b.origin + cfUrl; } catch(e) {} }
+      if (!cfUrl.startsWith("http")) cfUrl = url + "/" + cfUrl;
+      result.contactFormUrl = cfUrl;
+      result.contactPageUrl = cfUrl;
+    } else {
+      // Try /contact as fallback
+      try {
+        var tryContact = new URL("/contact", url).href;
+        var cpTry = await fetchUrl(tryContact, { timeout: 5000 });
+        if (cpTry.status === 200) {
+          result.contactFormUrl = tryContact;
+          result.contactPageUrl = tryContact;
+          extractEmails(cpTry.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+          extractPhones(stripHtml(cpTry.body)).forEach(function(p) { if (result.phones.indexOf(p) < 0) result.phones.push(p); });
+        }
+      } catch(e) {}
+    }
+
+    // Scrape the contact page if found via href match
+    if (result.contactPageUrl && result.contactPageUrl !== url && result.contactPageUrl !== result.contactFormUrl) {
+      try {
+        var cpPage = await fetchUrl(result.contactPageUrl, { timeout: 8000 });
+        extractEmails(cpPage.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+        extractPhones(stripHtml(cpPage.body)).forEach(function(p) { if (result.phones.indexOf(p) < 0) result.phones.push(p); });
+      } catch(e) {}
+    }
+
+    // Owner hints from homepage
     var ownerPatterns = [
       /(?:owner|founder|director|president|ceo|managing member)[^<]{0,60}/gi,
       /(?:meet\s+(?:our\s+)?(?:owner|team|founder))[^<]{0,120}/gi
     ];
     ownerPatterns.forEach(function(p) {
       var m = home.body.match(p);
-      if (m) result.ownerHints = result.ownerHints.concat(m.slice(0,3));
+      if (m) result.ownerHints = result.ownerHints.concat(m.slice(0, 3));
     });
-    var cm = home.body.match(/href=["']([^"']*contact[^"']*)/i);
-    if (cm) {
-      var cu = cm[1];
-      if (cu.startsWith("/")) { try { var b = new URL(url); cu = b.origin+cu; } catch(e) {} }
-      if (!cu.startsWith("http")) cu = url+"/"+cu;
-      result.contactPageUrl = cu;
-      try {
-        var cp  = await fetchUrl(cu, { timeout: 8000 });
-        var cpe = extractEmails(cp.body);
-        var cpp = extractPhones(stripHtml(cp.body));
-        var seenE={};
-        result.emails.concat(cpe).forEach(function(e) { if (!seenE[e]) seenE[e]=true; });
-        result.emails = Object.keys(seenE).slice(0,5);
-        var seenP={};
-        result.phones.concat(cpp).forEach(function(p) { if (!seenP[p]) seenP[p]=true; });
-        result.phones = Object.keys(seenP).slice(0,5);
-        ownerPatterns.forEach(function(p) {
-          var m = cp.body.match(p);
-          if (m) result.ownerHints = result.ownerHints.concat(m.slice(0,3));
-        });
-      } catch(e) {}
-    }
+
+    // About page for additional owner hints and emails
     try {
-      var aboutUrl = (function() {
-        try { return new URL("/about", url).href; } catch(e) { return null; }
-      })();
-      if (aboutUrl) {
-        var ap = await fetchUrl(aboutUrl, { timeout: 6000 });
-        if (ap.status === 200) {
-          var ape = extractEmails(ap.body);
-          ape.forEach(function(e) { if (result.emails.indexOf(e)<0) result.emails.push(e); });
-          ownerPatterns.forEach(function(p) {
-            var m = ap.body.match(p);
-            if (m) result.ownerHints = result.ownerHints.concat(m.slice(0,3));
-          });
-        }
+      var aboutUrl = new URL("/about", url).href;
+      var ap = await fetchUrl(aboutUrl, { timeout: 6000 });
+      if (ap.status === 200) {
+        extractEmails(ap.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+        ownerPatterns.forEach(function(p) {
+          var m = ap.body.match(p);
+          if (m) result.ownerHints = result.ownerHints.concat(m.slice(0, 3));
+        });
       }
     } catch(e) {}
-  } catch(e) { logger.warn("Scrape error: "+e.message); }
+
+    result.emails = result.emails.slice(0, 8);
+    result.phones = result.phones.slice(0, 5);
+
+  } catch(e) { logger.warn("Scrape error: " + e.message); }
   return result;
 }
 
@@ -368,173 +413,87 @@ function isAttorneyOrTrustee(name, title, org, knownAttorneyNames) {
   var nameLower  = (name  || "").toLowerCase().trim();
   var titleLower = (title || "").toLowerCase();
   var orgLower   = (org   || "").toLowerCase();
-
-  if (TRUSTEE_NAME_PATTERN.test(nameLower))  return true;
-  if (NAME_SUFFIX_PATTERN.test(name))        return true;
+  if (TRUSTEE_NAME_PATTERN.test(nameLower))    return true;
+  if (NAME_SUFFIX_PATTERN.test(name))          return true;
   if (ATTORNEY_TITLE_PATTERN.test(titleLower)) return true;
-  if (LAW_FIRM_PATTERN.test(orgLower))       return true;
-
+  if (LAW_FIRM_PATTERN.test(orgLower))         return true;
   var nameClean = nameLower.replace(NAME_SUFFIX_PATTERN, "").trim();
   var isKnown = (knownAttorneyNames || []).some(function(known) {
     return known.length > 3 && (known.includes(nameClean) || nameClean.includes(known));
   });
   if (isKnown) return true;
-
   return false;
 }
 
 // ── TRUSTEE LOOKUP — database-backed ──
 async function lookupTrusteeFromDirectory(trusteeName, courtId) {
   const { query: dbQuery } = require("./db/connection");
-
-  // Skip generic US Trustee label
   if (trusteeName) {
     var nameLower = trusteeName.toLowerCase().trim();
-    if (nameLower === "us trustee" ||
-        nameLower === "u.s. trustee" ||
-        nameLower === "united states trustee") {
+    if (nameLower === "us trustee" || nameLower === "u.s. trustee" || nameLower === "united states trustee") {
       trusteeName = null;
     }
   }
-
   try {
-    // Match by last name first
     if (trusteeName) {
       var lastName = trusteeName.split(" ").slice(-1)[0].toLowerCase();
       if (lastName.length > 2) {
         var nameResult = await dbQuery(
-          `SELECT * FROM trustees
-           WHERE active = TRUE
-             AND LOWER(full_name) LIKE $1
-           ORDER BY full_name LIMIT 1`,
+          `SELECT * FROM trustees WHERE active=TRUE AND LOWER(full_name) LIKE $1 ORDER BY full_name LIMIT 1`,
           [`%${lastName}%`]
         );
         if (nameResult.rows.length > 0) {
           var t = nameResult.rows[0];
-          return {
-            name:        t.full_name,
-            email:       t.email || null,
-            phone:       t.phone || null,
-            district:    t.district_code,
-            source:      "USTP Sub-V Trustee Directory (justice.gov)",
-            url:         t.source_url || "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
-            confidence:  "HIGH",
-            verified_at: t.source_verified_at || null,
-          };
+          return { name:t.full_name, email:t.email||null, phone:t.phone||null, district:t.district_code, source:"USTP Sub-V Trustee Directory (justice.gov)", url:t.source_url||"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:"HIGH", verified_at:t.source_verified_at||null };
         }
       }
     }
-
-    // Fall back to district lookup
     if (courtId) {
       var districtResult = await dbQuery(
-        `SELECT * FROM trustees
-         WHERE active = TRUE AND district_code = $1
-         ORDER BY full_name`,
+        `SELECT * FROM trustees WHERE active=TRUE AND district_code=$1 ORDER BY full_name`,
         [courtId.toLowerCase()]
       );
       if (districtResult.rows.length > 0) {
-        var list  = districtResult.rows;
-        var first = list[0];
-        return {
-          name:        trusteeName || "Not yet assigned — see district directory",
-          email:       first.email || null,
-          phone:       first.phone || null,
-          district:    courtId,
-          allTrustees: list.map(function(t) {
-            return { name: t.full_name, email: t.email, phone: t.phone };
-          }),
-          source:      "USTP Sub-V Trustee Directory (justice.gov)",
-          url:         "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
-          confidence:  trusteeName ? "MEDIUM" : "LOW",
-        };
+        var list = districtResult.rows, first = list[0];
+        return { name:trusteeName||"Not yet assigned — see district directory", email:first.email||null, phone:first.phone||null, district:courtId, allTrustees:list.map(function(t){ return {name:t.full_name,email:t.email,phone:t.phone}; }), source:"USTP Sub-V Trustee Directory (justice.gov)", url:"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:trusteeName?"MEDIUM":"LOW" };
       }
     }
-  } catch(e) {
-    logger.warn("Trustee DB lookup failed: " + e.message);
-  }
-
-  return {
-    name:       trusteeName || null,
-    email:      null,
-    phone:      null,
-    source:     "USTP Directory — trustee not yet matched",
-    url:        "https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees",
-    confidence: "LOW",
-  };
+  } catch(e) { logger.warn("Trustee DB lookup failed: "+e.message); }
+  return { name:trusteeName||null, email:null, phone:null, source:"USTP Directory — trustee not yet matched", url:"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:"LOW" };
 }
 
 var STATE_BAR = {
-  txsb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",
-  txnb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",
-  txeb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",
-  txwb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",
-  nysb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",
-  nyeb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",
-  nynb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",
-  nywb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",
-  flsb:"https://www.floridabar.org/directories/find-mbr/",
-  flmb:"https://www.floridabar.org/directories/find-mbr/",
-  flnb:"https://www.floridabar.org/directories/find-mbr/",
-  caeb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",
-  canb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",
-  cacb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",
-  casb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",
-  ilnb:"https://www.iardc.org/lawyer-search",
-  ilcb:"https://www.iardc.org/lawyer-search",
-  njb:"https://www.njcourts.gov/attorneys/attySearch.html",
-  deb:"https://www.dsba.org/find-a-lawyer/",
-  vaeb:"https://www.vsb.org/site/members/search",
-  vawb:"https://www.vsb.org/site/members/search",
-  ganb:"https://www.gabar.org/membersearchapp/",
-  gamb:"https://www.gabar.org/membersearchapp/",
-  paeb:"https://www.padisciplinaryboard.org/for-the-public/find-attorney",
-  pamb:"https://www.padisciplinaryboard.org/for-the-public/find-attorney",
-  ohsb:"https://www.supremecourt.ohio.gov/AttorneySearch/",
-  ohnb:"https://www.supremecourt.ohio.gov/AttorneySearch/",
-  nceb:"https://www.ncbar.gov/for-the-public/attorney-lookup/",
-  ncmb:"https://www.ncbar.gov/for-the-public/attorney-lookup/",
-  mab:"https://www.massbbo.org/bbolookup.php",
-  mdb:"https://www.courts.state.md.us/attyregistry",
-  wawb:"https://www.mywsba.org/LawyerDirectory/",
-  waeb:"https://www.mywsba.org/LawyerDirectory/",
-  mnb:"https://lprb.mncourts.gov/attorney/Pages/AttorneySearch.aspx",
-  orb:"https://www.osbar.org/public/ris/rissearch.asp",
-  meb:"https://www.mainebar.org/page/FindanAttorney",
-  ndb:"https://www.sband.org/page/find_a_lawyer_"
+  txsb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",txnb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",txeb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",txwb:"https://www.texasbar.com/AM/Template.cfm?Section=Find_A_Lawyer",
+  nysb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",nyeb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",nynb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",nywb:"https://iapps.courts.state.ny.us/attorney/AttorneySearch",
+  flsb:"https://www.floridabar.org/directories/find-mbr/",flmb:"https://www.floridabar.org/directories/find-mbr/",flnb:"https://www.floridabar.org/directories/find-mbr/",
+  caeb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",canb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",cacb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",casb:"https://apps.calbar.ca.gov/attorney/Licensee/Detail/",
+  ilnb:"https://www.iardc.org/lawyer-search",ilcb:"https://www.iardc.org/lawyer-search",njb:"https://www.njcourts.gov/attorneys/attySearch.html",deb:"https://www.dsba.org/find-a-lawyer/",
+  vaeb:"https://www.vsb.org/site/members/search",vawb:"https://www.vsb.org/site/members/search",ganb:"https://www.gabar.org/membersearchapp/",gamb:"https://www.gabar.org/membersearchapp/",
+  paeb:"https://www.padisciplinaryboard.org/for-the-public/find-attorney",pamb:"https://www.padisciplinaryboard.org/for-the-public/find-attorney",
+  ohsb:"https://www.supremecourt.ohio.gov/AttorneySearch/",ohnb:"https://www.supremecourt.ohio.gov/AttorneySearch/",
+  nceb:"https://www.ncbar.gov/for-the-public/attorney-lookup/",ncmb:"https://www.ncbar.gov/for-the-public/attorney-lookup/",
+  mab:"https://www.massbbo.org/bbolookup.php",mdb:"https://www.courts.state.md.us/attyregistry",
+  wawb:"https://www.mywsba.org/LawyerDirectory/",waeb:"https://www.mywsba.org/LawyerDirectory/",
+  mnb:"https://lprb.mncourts.gov/attorney/Pages/AttorneySearch.aspx",orb:"https://www.osbar.org/public/ris/rissearch.asp",
+  meb:"https://www.mainebar.org/page/FindanAttorney",ndb:"https://www.sband.org/page/find_a_lawyer_"
 };
 
 var STATE_MAP = {
-  txsb:"Texas",txnb:"Texas",txeb:"Texas",txwb:"Texas",
-  nysb:"New York",nyeb:"New York",nynb:"New York",nywb:"New York",
-  flsb:"Florida",flmb:"Florida",flnb:"Florida",
-  caeb:"California",canb:"California",cacb:"California",casb:"California",
-  ilnb:"Illinois",ilcb:"Illinois",ilsb:"Illinois",
-  njb:"New Jersey",deb:"Delaware",dcb:"Washington DC",
+  txsb:"Texas",txnb:"Texas",txeb:"Texas",txwb:"Texas",nysb:"New York",nyeb:"New York",nynb:"New York",nywb:"New York",
+  flsb:"Florida",flmb:"Florida",flnb:"Florida",caeb:"California",canb:"California",cacb:"California",casb:"California",
+  ilnb:"Illinois",ilcb:"Illinois",ilsb:"Illinois",njb:"New Jersey",deb:"Delaware",dcb:"Washington DC",
   vaeb:"Virginia",vawb:"Virginia",ganb:"Georgia",gamb:"Georgia",gasb:"Georgia",
-  paeb:"Pennsylvania",pamb:"Pennsylvania",pawb:"Pennsylvania",
-  ohsb:"Ohio",ohnb:"Ohio",
-  nceb:"North Carolina",ncmb:"North Carolina",ncwb:"North Carolina",
-  mab:"Massachusetts",mdb:"Maryland",
-  wawb:"Washington",waeb:"Washington",
-  azb:"Arizona",cob:"Colorado",mnb:"Minnesota",orb:"Oregon",
-  meb:"Maine",ndb:"North Dakota",ksb:"Kansas",
-  kyeb:"Kentucky",kywb:"Kentucky",
-  laeb:"Louisiana",lamb:"Louisiana",lawb:"Louisiana",
-  mieb:"Michigan",miwb:"Michigan",
-  msnb:"Mississippi",mssb:"Mississippi",
-  moeb:"Missouri",mowb:"Missouri",mtb:"Montana",
-  nebraskab:"Nebraska",nvb:"Nevada",nhb:"New Hampshire",
-  nmb:"New Mexico",prb:"Puerto Rico",rib:"Rhode Island",
-  scb:"South Carolina",sdb:"South Dakota",
-  tneb:"Tennessee",tnmb:"Tennessee",tnwb:"Tennessee",
-  utb:"Utah",vtb:"Vermont",
-  wvnb:"West Virginia",wvsb:"West Virginia",
-  wieb:"Wisconsin",wiwb:"Wisconsin",wyb:"Wyoming",
-  areb:"Arkansas",arwb:"Arkansas",akb:"Alaska",
-  arb:"Arizona",idb:"Idaho",ianb:"Iowa",iasb:"Iowa",
-  innb:"Indiana",insb:"Indiana",
-  okeb:"Oklahoma",oknb:"Oklahoma",okwb:"Oklahoma"
+  paeb:"Pennsylvania",pamb:"Pennsylvania",pawb:"Pennsylvania",ohsb:"Ohio",ohnb:"Ohio",
+  nceb:"North Carolina",ncmb:"North Carolina",ncwb:"North Carolina",mab:"Massachusetts",mdb:"Maryland",
+  wawb:"Washington",waeb:"Washington",azb:"Arizona",cob:"Colorado",mnb:"Minnesota",orb:"Oregon",
+  meb:"Maine",ndb:"North Dakota",ksb:"Kansas",kyeb:"Kentucky",kywb:"Kentucky",
+  laeb:"Louisiana",lamb:"Louisiana",lawb:"Louisiana",mieb:"Michigan",miwb:"Michigan",
+  msnb:"Mississippi",mssb:"Mississippi",moeb:"Missouri",mowb:"Missouri",mtb:"Montana",
+  nebraskab:"Nebraska",nvb:"Nevada",nhb:"New Hampshire",nmb:"New Mexico",prb:"Puerto Rico",
+  rib:"Rhode Island",scb:"South Carolina",sdb:"South Dakota",tneb:"Tennessee",tnmb:"Tennessee",tnwb:"Tennessee",
+  utb:"Utah",vtb:"Vermont",wvnb:"West Virginia",wvsb:"West Virginia",wieb:"Wisconsin",wiwb:"Wisconsin",
+  wyb:"Wyoming",areb:"Arkansas",arwb:"Arkansas",akb:"Alaska",arb:"Arizona",idb:"Idaho",
+  ianb:"Iowa",iasb:"Iowa",innb:"Indiana",insb:"Indiana",okeb:"Oklahoma",oknb:"Oklahoma",okwb:"Oklahoma"
 };
 
 // ── MAIN ENRICHMENT ──
@@ -544,31 +503,29 @@ async function enrichCase(caseData) {
   var state   = STATE_MAP[courtId] || "";
 
   if (!debtor) {
-    return {
-      company:    null,
-      aiData:     null,
-      trustee:    caseData.trustee    || null,
-      attorneys:  caseData.attorneys  || [],
-      principals: caseData.principals || [],
-      warnings:   ["No debtor name available for enrichment."]
-    };
+    return { company:null, aiData:null, trustee:caseData.trustee||null, attorneys:caseData.attorneys||[], principals:caseData.principals||[], warnings:["No debtor name available for enrichment."] };
   }
 
   var result = { company:null, aiData:null, trustee:null, attorneys:[], principals:[], warnings:[] };
 
-  // Known attorney names for filtering
   var knownAttorneyNames = (caseData.attorneys || []).map(function(a) {
-    return (a.name || "").toLowerCase()
-      .replace(NAME_SUFFIX_PATTERN, "").trim();
+    return (a.name || "").toLowerCase().replace(NAME_SUFFIX_PATTERN, "").trim();
   }).filter(function(n) { return n.length > 3; });
 
   // 1. AI search
   var aiData = await aiSearchEnrich(caseData, debtor);
   result.aiData = aiData;
 
-  // 2. Google Places
-  logger.info("Google Places: " + debtor);
-  var places = await googlePlaces(debtor, state);
+  // 2. FIX: Google Places searches trade name first — it has far better Maps
+  // coverage than holding company legal names. Falls back to legal name.
+  var tradeName = (aiData && aiData.tradeName) || null;
+  var placesSearchName = tradeName || debtor;
+  logger.info("Google Places: " + placesSearchName + (tradeName ? " (trade name)" : ""));
+  var places = await googlePlaces(placesSearchName, state);
+  if (!places && tradeName) {
+    logger.info("Google Places retry with legal name: " + debtor);
+    places = await googlePlaces(debtor, state);
+  }
 
   // 3. Merge company data
   var website  = (aiData && aiData.website)    || (places && places.website)  || null;
@@ -576,127 +533,102 @@ async function enrichCase(caseData) {
 
   result.company = {
     name:             debtor,
-    tradeName:        (aiData && aiData.tradeName)        || null,
-    address:          (aiData && aiData.address)          || (places && places.address) || null,
-    phone:            (places && places.phone)            || (aiData && aiData.phone)   || null,
+    tradeName:        tradeName,
+    address:          (aiData && aiData.address) || (places && places.address) || null,
+    phone:            (places && places.phone)   || (aiData && aiData.phone)   || null,
     website:          website,
     altWebsite:       website2,
-    mapsUrl:          (places && places.mapsUrl)          || null,
+    mapsUrl:          (places && places.mapsUrl) || null,
     businessType:     (aiData && aiData.businessType)     || null,
     bankruptcyReason: (aiData && aiData.bankruptcyReason) || null,
     emails:           [],
     scrapedPhones:    [],
     ownerHints:       [],
+    socialLinks:      {},
+    contactFormUrl:   null,
     sources:          (aiData && aiData.sources) || [],
     confidence:       (aiData && aiData.confidence) || "LOW"
   };
 
-  // 4. Scrape websites
+  // 4. Scrape websites — trade name site first (better contact info)
+  var tradeWebsite = (places && places.website) || null;
+  if (tradeWebsite && tradeWebsite !== website) {
+    var wt = await scrapeWebsite(tradeWebsite);
+    result.company.emails        = wt.emails        || [];
+    result.company.scrapedPhones = wt.phones        || [];
+    result.company.contactPageUrl= wt.contactPageUrl;
+    result.company.ownerHints    = wt.ownerHints    || [];
+    result.company.socialLinks   = wt.socialLinks   || {};
+    result.company.contactFormUrl= wt.contactFormUrl|| null;
+  }
   if (website) {
     var w1 = await scrapeWebsite(website);
-    result.company.emails         = w1.emails     || [];
-    result.company.scrapedPhones  = w1.phones     || [];
-    result.company.contactPageUrl = w1.contactPageUrl;
-    result.company.ownerHints     = w1.ownerHints || [];
+    w1.emails.forEach(function(e) { if (result.company.emails.indexOf(e) < 0) result.company.emails.push(e); });
+    w1.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p) < 0) result.company.scrapedPhones.push(p); });
+    w1.ownerHints.forEach(function(h) { if (result.company.ownerHints.indexOf(h) < 0) result.company.ownerHints.push(h); });
+    if (!result.company.contactFormUrl && w1.contactFormUrl) result.company.contactFormUrl = w1.contactFormUrl;
+    if (!result.company.contactPageUrl && w1.contactPageUrl) result.company.contactPageUrl = w1.contactPageUrl;
+    Object.keys(w1.socialLinks || {}).forEach(function(pl) {
+      if (!result.company.socialLinks[pl]) result.company.socialLinks[pl] = w1.socialLinks[pl];
+    });
   }
   if (website2) {
     var w2 = await scrapeWebsite(website2);
-    (w2.emails||[]).forEach(function(e) { if (result.company.emails.indexOf(e)<0) result.company.emails.push(e); });
-    (w2.phones||[]).forEach(function(p) { if (result.company.scrapedPhones.indexOf(p)<0) result.company.scrapedPhones.push(p); });
-    (w2.ownerHints||[]).forEach(function(h) { if (result.company.ownerHints.indexOf(h)<0) result.company.ownerHints.push(h); });
+    w2.emails.forEach(function(e) { if (result.company.emails.indexOf(e) < 0) result.company.emails.push(e); });
+    w2.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p) < 0) result.company.scrapedPhones.push(p); });
+    w2.ownerHints.forEach(function(h) { if (result.company.ownerHints.indexOf(h) < 0) result.company.ownerHints.push(h); });
+    Object.keys(w2.socialLinks || {}).forEach(function(pl) {
+      if (!result.company.socialLinks[pl]) result.company.socialLinks[pl] = w2.socialLinks[pl];
+    });
+    if (!result.company.contactFormUrl && w2.contactFormUrl) result.company.contactFormUrl = w2.contactFormUrl;
   }
 
-  // 5. Build domains from real website URLs only
+  // 5. Build domains for email guessing
   var domains = [];
-  [website, website2].forEach(function(w) {
+  [website, website2, tradeWebsite].forEach(function(w) {
     if (!w) return;
-    try {
-      var d = new URL(w).hostname.replace(/^www\./, "");
-      if (d && d.length <= 40 && domains.indexOf(d) < 0) domains.push(d);
-    } catch(e) {}
+    try { var d = new URL(w).hostname.replace(/^www\./, ""); if (d && d.length <= 40 && domains.indexOf(d) < 0) domains.push(d); } catch(e) {}
   });
   result.company.emails.forEach(function(e) {
     var parts = e.split("@");
-    if (parts.length === 2 && parts[1].length <= 40 && domains.indexOf(parts[1]) < 0) {
-      domains.push(parts[1]);
-    }
+    if (parts.length === 2 && parts[1].length <= 40 && domains.indexOf(parts[1]) < 0) domains.push(parts[1]);
   });
 
   function makePrincipal(name, title, email, phone, isPrimary, source, confidence) {
     var guesses = [];
-    domains.forEach(function(d) {
-      guessEmails(name, d).forEach(function(g) { guesses.push(g); });
-    });
-    return {
-      name:         name,
-      role:         title || "Contact",
-      title:        title || null,
-      email:        email || null,
-      phone:        phone || null,
-      emailGuesses: guesses,
-      domains:      domains,
-      isPrimary:    isPrimary || false,
-      source:       source || "Public web search",
-      confidence:   confidence || "MEDIUM",
-      note:         "Verify before outreach"
-    };
+    domains.forEach(function(d) { guessEmails(name, d).forEach(function(g) { guesses.push(g); }); });
+    return { name:name, role:title||"Contact", title:title||null, email:email||null, phone:phone||null, emailGuesses:guesses, domains:domains, isPrimary:isPrimary||false, source:source||"Public web search", confidence:confidence||"MEDIUM", note:"Verify before outreach" };
   }
 
-  // 6. Build principals
+  // 6. Build principals — filter attorneys and trustees out
   result.principals = [];
-
   if (aiData && aiData.ownerName) {
     if (!isAttorneyOrTrustee(aiData.ownerName, aiData.ownerTitle, null, knownAttorneyNames)) {
-      result.principals.push(makePrincipal(
-        aiData.ownerName,
-        aiData.ownerTitle || "Owner / Operator",
-        aiData.ownerEmail,
-        aiData.ownerPhone || result.company.phone,
-        true,
-        "Public web search",
-        aiData.confidence
-      ));
+      result.principals.push(makePrincipal(aiData.ownerName, aiData.ownerTitle||"Owner / Operator", aiData.ownerEmail, aiData.ownerPhone||result.company.phone, true, "Public web search", aiData.confidence));
     }
   }
-
-  if (aiData && aiData.petitionSigner && aiData.petitionSigner !== (aiData.ownerName || "")) {
+  if (aiData && aiData.petitionSigner && aiData.petitionSigner !== (aiData.ownerName||"")) {
     if (!isAttorneyOrTrustee(aiData.petitionSigner, aiData.petitionSignerTitle, null, knownAttorneyNames)) {
-      result.principals.push(makePrincipal(
-        aiData.petitionSigner,
-        aiData.petitionSignerTitle || "Authorized Representative",
-        null, null, false,
-        "Bankruptcy petition (public record)",
-        "HIGH"
-      ));
+      result.principals.push(makePrincipal(aiData.petitionSigner, aiData.petitionSignerTitle||"Authorized Representative", null, null, false, "Bankruptcy petition (public record)", "HIGH"));
     }
   }
-
   if (aiData && aiData.otherContacts) {
     aiData.otherContacts.forEach(function(oc) {
       if (!oc || !oc.name) return;
-      if (isAttorneyOrTrustee(oc.name, oc.title || oc.role, oc.organization || oc.firm, knownAttorneyNames)) return;
-      result.principals.push(makePrincipal(
-        oc.name, oc.role, oc.email, oc.phone,
-        false, "Public web search", "MEDIUM"
-      ));
+      if (isAttorneyOrTrustee(oc.name, oc.title||oc.role, oc.organization||oc.firm, knownAttorneyNames)) return;
+      result.principals.push(makePrincipal(oc.name, oc.role, oc.email, oc.phone, false, "Public web search", "MEDIUM"));
     });
   }
-
-  if (!result.principals.length) {
-    result.warnings.push("No owner or principal found in public search — manual review needed.");
-  }
+  if (!result.principals.length) result.warnings.push("No owner or principal found in public search — manual review needed.");
 
   // 7. Trustee — database lookup
   var trusteeName = (caseData.trustee && caseData.trustee.name) ? caseData.trustee.name : null;
   var td = await lookupTrusteeFromDirectory(trusteeName, courtId);
-  result.trustee = Object.assign({}, caseData.trustee || {}, td);
+  result.trustee = Object.assign({}, caseData.trustee||{}, td);
 
   // 8. Attorneys with state bar links
-  result.attorneys = (caseData.attorneys || []).map(function(a) {
-    return Object.assign({}, a, {
-      barUrl: STATE_BAR[courtId] || "https://www.americanbar.org/groups/legal_services/flh-home/flh-lawyer-locator/",
-      note:   "Search state bar directory for verified email and phone"
-    });
+  result.attorneys = (caseData.attorneys||[]).map(function(a) {
+    return Object.assign({}, a, { barUrl:STATE_BAR[courtId]||"https://www.americanbar.org/groups/legal_services/flh-home/flh-lawyer-locator/", note:"Search state bar directory for verified email and phone" });
   });
 
   return result;
