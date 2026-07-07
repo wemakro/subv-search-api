@@ -374,7 +374,7 @@ async function runDailyPipeline(opts) {
         }
 
         // Queue for Close push if Sub-V confirmed
-        if (result.caseDbId && result.hydrated?.subchapterV?.isLikely) {
+        if (result.caseDbId && result.isNew) {
           newCasesForClose.push({
             caseDbId: result.caseDbId,
             hydrated: result.hydrated,
