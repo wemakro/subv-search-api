@@ -3,11 +3,13 @@ const https  = require("https");
 const http   = require("http");
 const logger = require("./logger");
 
-const GOOGLE_KEY   = process.env.GOOGLE_API_KEY  || "";
-const GEMINI_KEY   = process.env.GEMINI_API_KEY  || "";
-const OPENAI_KEY   = process.env.OPENAI_API_KEY  || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL    || "gemini-2.5-flash";
+const GOOGLE_KEY     = process.env.GOOGLE_API_KEY   || "";
+const GEMINI_KEY     = process.env.GEMINI_API_KEY   || "";
+const OPENAI_KEY     = process.env.OPENAI_API_KEY   || "";
+const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || "";
+const GEMINI_MODEL   = process.env.GEMINI_MODEL     || "gemini-2.5-flash";
 
+// ── FETCH ──────────────────────────────────────────────────────────────────
 function fetchUrl(url, opts) {
   opts = opts || {};
   return new Promise(function(resolve, reject) {
@@ -62,6 +64,7 @@ function getDebtorName(caseData) {
   return (name || caseData.debtorName || caseData.caseName || caseData.name || "").trim();
 }
 
+// ── HELPERS ────────────────────────────────────────────────────────────────
 function stripHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi,"")
              .replace(/<style[\s\S]*?<\/style>/gi,"")
@@ -85,8 +88,7 @@ function extractPhones(text) {
 }
 
 function guessEmails(name, domain) {
-  if (!name || !domain) return [];
-  if (domain.length > 40) return [];
+  if (!name || !domain || domain.length > 40) return [];
   var parts = name.toLowerCase().replace(/[^a-z\s]/g,"").trim().split(/\s+/);
   var first = parts[0]||"", last = parts[parts.length-1]||"";
   if (!first || !last || first === last) return [];
@@ -99,27 +101,19 @@ function guessEmails(name, domain) {
   ];
 }
 
-// ── FIX: Brace-counting JSON extractor ──
-// The previous greedy regex /\{[\s\S]*\}/ matched from the first { to the
-// LAST } in the string. Gemini appends citation text with curly braces after
-// the JSON object, so the regex overshot and produced invalid JSON.
-// Brace-counting finds exactly the first complete JSON object and stops there.
+// ── FIX: Brace-counting JSON parser ───────────────────────────────────────
+// Replaces greedy regex that overshot past Gemini citation text containing {}
 function parseJsonFromText(text) {
   if (!text) return null;
-
-  // Try direct parse first (clean response with no backticks)
   try { return JSON.parse(text.trim()); } catch(e) {}
 
-  // Strip markdown backticks Gemini wraps the response in
   var clean = text
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
     .trim();
 
-  // Try again after stripping
   try { return JSON.parse(clean); } catch(e) {}
 
-  // Brace-count to extract the first complete JSON object
   var start = clean.indexOf("{");
   if (start === -1) return null;
 
@@ -135,10 +129,10 @@ function parseJsonFromText(text) {
       }
     }
   }
-
   return null;
 }
 
+// ── GEMINI PROMPT ──────────────────────────────────────────────────────────
 function buildGeminiPrompt(caseData, debtorName) {
   var knownData = {
     docketId:     caseData.docketId,
@@ -169,14 +163,7 @@ function buildGeminiPrompt(caseData, debtorName) {
     + "7. What the business does\n"
     + "8. Why they filed for bankruptcy\n"
     + "9. Include source URLs for every important claim\n\n"
-    + "CRITICAL: The otherContacts array must ONLY contain the actual business owner, operator,\n"
-    + "managing member, president, CEO, or employee of the debtor company.\n"
-    + "NEVER include in otherContacts:\n"
-    + "- Attorneys, lawyers, counsel, or anyone with Esq. in their name\n"
-    + "- Law firms or anyone associated with a law firm\n"
-    + "- Trustees, US Trustee, or bankruptcy administrators\n"
-    + "- Anyone whose role contains 'attorney', 'counsel', 'legal', or 'trustee'\n"
-    + "If you are unsure whether someone is the business owner or their attorney, omit them.\n\n"
+    + "CRITICAL: Never include attorneys, law firms, trustees, or US Trustee in otherContacts.\n\n"
     + "Return ONLY this JSON shape:\n"
     + "{\n"
     + '  "companyLegalName": null,\n'
@@ -200,6 +187,147 @@ function buildGeminiPrompt(caseData, debtorName) {
     + "}";
 }
 
+// ── CLAUDE REVIEW PROMPT (Layer 2) ─────────────────────────────────────────
+function buildClaudeReviewPrompt(caseData, debtorName, geminiResult) {
+  var g = geminiResult || {};
+  var tradeName = g.tradeName || debtorName;
+  var daysOld = caseData.dateFiled
+    ? Math.floor((Date.now() - new Date(caseData.dateFiled)) / 86400000)
+    : null;
+
+  return "You are the second enrichment layer for a bankruptcy CRM. Gemini already researched this case.\n\n"
+    + "Case: " + debtorName + " | Court: " + (caseData.courtId||"") + "\n"
+    + "Filed: " + (caseData.dateFiled||"") + (daysOld ? " (" + daysOld + " days ago)" : "") + "\n\n"
+    + "GEMINI FOUND:\n" + JSON.stringify(g, null, 2) + "\n\n"
+    + "Your job: REVIEW and FILL GAPS only. Do not repeat what Gemini confirmed.\n\n"
+
+    + "TASK 1 — VALIDATE THE OWNER:\n"
+    + "Gemini returned ownerName: '" + (g.ownerName||"null") + "'\n"
+    + "REJECT if: contains Esq., Attorney, Counsel, Law Firm, Trustee, or matches any attorney in the case.\n"
+    + "If rejected or null: search '" + debtorName + " owner' or '" + tradeName + " founder'\n"
+    + "Set ownerValidated:true only if confirmed as actual business operator.\n\n"
+
+    + "TASK 2 — FIND ALL EMAILS (return as array):\n"
+    + "- info@ from the website domain (always include, confidence: guessed)\n"
+    + "- Any email found explicitly on website (confidence: confirmed)\n"
+    + "- Pattern-derived: first.last@domain, firstname@domain (confidence: guessed)\n\n"
+
+    + "TASK 3 — FIND ALL PHONES (return as array):\n"
+    + "- Main business line from Google Maps or website\n"
+    + "- Owner direct/mobile if findable\n\n"
+
+    + "TASK 4 — DIGITAL FOOTPRINT for trade name '" + tradeName + "':\n"
+    + "- Contact page URL (search '" + tradeName + " contact us')\n"
+    + "- Instagram profile URL\n"
+    + "- Facebook page URL\n"
+    + "- LinkedIn company URL\n"
+    + "- Owner's LinkedIn profile URL\n"
+    + "- Google Maps listing URL\n"
+    + "- Yelp listing URL\n\n"
+
+    + "TASK 5 — BUSINESS INTEL:\n"
+    + "- One sentence: what this business does (specific)\n"
+    + "- One sentence: why they filed bankruptcy\n"
+    + "- Is the business still operating? (true/false)\n"
+    + "- Any red flags (closed, shell company, uncontactable, etc.)\n\n"
+
+    + "TASK 6 — BEST OUTREACH CHANNEL:\n"
+    + "Pick one: email | phone | instagram_dm | facebook | contact_form | linkedin | manual\n\n"
+
+    + "Return ONLY this JSON:\n"
+    + "{\n"
+    + '  "ownerName": null,\n'
+    + '  "ownerTitle": null,\n'
+    + '  "ownerEmails": [],\n'
+    + '  "ownerPhones": [],\n'
+    + '  "ownerLinkedIn": null,\n'
+    + '  "ownerValidated": false,\n'
+    + '  "ownerValidationNote": null,\n'
+    + '  "tradeName": null,\n'
+    + '  "website": null,\n'
+    + '  "contactFormUrl": null,\n'
+    + '  "instagram": null,\n'
+    + '  "facebook": null,\n'
+    + '  "linkedInCompany": null,\n'
+    + '  "googleMapsUrl": null,\n'
+    + '  "yelpUrl": null,\n'
+    + '  "businessDescription": null,\n'
+    + '  "bankruptcyReason": null,\n'
+    + '  "stillOperating": true,\n'
+    + '  "bestOutreachChannel": "manual",\n'
+    + '  "redFlags": [],\n'
+    + '  "confidence": "LOW"\n'
+    + "}\n\n"
+    + "ownerEmails format: [{\"email\":\"info@domain.com\",\"confidence\":\"guessed\",\"type\":\"office\"}]\n"
+    + "ownerPhones format: [{\"phone\":\"+17275551234\",\"label\":\"Main business line\",\"type\":\"office\"}]\n"
+    + "confidence values: 'confirmed' (found explicitly) | 'guessed' (derived)";
+}
+
+// ── MERGE Gemini + Claude results ──────────────────────────────────────────
+function mergeEnrichmentResults(gemini, claude) {
+  if (!gemini && !claude) return null;
+  if (!claude)  return gemini;
+  if (!gemini)  return claude;
+
+  var g = gemini, c = claude;
+
+  // Owner: Claude validates and overrides Gemini.
+  // If Claude explicitly set ownerValidated:false and cleared the name, trust that.
+  var ownerName = c.ownerName || g.ownerName || null;
+  if (c.ownerValidated === false && c.ownerName === null && g.ownerName) {
+    ownerName = null; // Claude rejected Gemini's finding
+  }
+
+  return {
+    // Company identity
+    companyLegalName:    g.companyLegalName || null,
+    tradeName:           c.tradeName       || g.tradeName      || null,
+    address:             g.address         || null,
+    phone:               g.phone           || c.ownerPhones && c.ownerPhones[0] && c.ownerPhones[0].phone || null,
+    website:             g.website         || c.website        || null,
+    altWebsite:          g.altWebsite      || null,
+    businessType:        c.businessDescription || g.businessType || null,
+    bankruptcyReason:    c.bankruptcyReason || g.bankruptcyReason || null,
+    stillOperating:      c.stillOperating !== undefined ? c.stillOperating : true,
+
+    // Owner — Claude layer takes priority
+    ownerName:           ownerName,
+    ownerTitle:          c.ownerTitle      || g.ownerTitle     || null,
+    ownerEmail:          (c.ownerEmails&&c.ownerEmails[0]) ? c.ownerEmails[0].email : g.ownerEmail || null,
+    ownerEmails:         c.ownerEmails     || [],
+    ownerPhone:          (c.ownerPhones&&c.ownerPhones[0]) ? c.ownerPhones[0].phone : g.ownerPhone || null,
+    ownerPhones:         c.ownerPhones     || [],
+    ownerLinkedIn:       c.ownerLinkedIn   || null,
+    ownerValidated:      c.ownerValidated  || false,
+    ownerValidationNote: c.ownerValidationNote || null,
+
+    // Petition data from Gemini
+    petitionSigner:      g.petitionSigner      || null,
+    petitionSignerTitle: g.petitionSignerTitle || null,
+    otherContacts:       g.otherContacts       || [],
+
+    // Digital footprint — Claude specialty
+    contactFormUrl:  c.contactFormUrl  || null,
+    instagram:       c.instagram       || null,
+    facebook:        c.facebook        || null,
+    linkedInCompany: c.linkedInCompany || null,
+    googleMapsUrl:   c.googleMapsUrl   || null,
+    yelpUrl:         c.yelpUrl         || null,
+
+    // Outreach intelligence
+    bestOutreachChannel: c.bestOutreachChannel || "manual",
+    redFlags:            c.redFlags            || [],
+
+    // Meta
+    sources:    (g.sources||[]).concat(c.sources||[]),
+    confidence: (ownerName && c.ownerValidated && c.ownerEmail) ? "HIGH"
+              : (ownerName && c.ownerValidated)                  ? "MEDIUM"
+              : (g.confidence || "LOW"),
+    warnings: [...(g.warnings||[]), ...(c.warnings||[])]
+  };
+}
+
+// ── GEMINI ─────────────────────────────────────────────────────────────────
 async function callGemini(prompt) {
   if (!GEMINI_KEY) return null;
   try {
@@ -213,21 +341,18 @@ async function callGemini(prompt) {
       }
     );
     if (res.status < 200 || res.status >= 300) {
-      logger.warn("Gemini HTTP " + res.status + ": " + res.body.slice(0, 500));
+      logger.warn("Gemini HTTP " + res.status + ": " + res.body.slice(0,500));
       return null;
     }
     var parsed = JSON.parse(res.body);
     var parts  = [];
-    var cand   = (parsed.candidates || [])[0];
+    var cand   = (parsed.candidates||[])[0];
     if (cand && cand.content && cand.content.parts) {
       cand.content.parts.forEach(function(p) { if (p.text) parts.push(p.text); });
     }
     var text = parts.join("");
-    if (!text) {
-      logger.warn("Gemini returned no text. Full response: " + res.body.slice(0, 1000));
-      return null;
-    }
-    logger.debug("Gemini raw preview: " + text.slice(0, 300));
+    if (!text) { logger.warn("Gemini returned no text"); return null; }
+    logger.debug("Gemini raw preview: " + text.slice(0,300));
     return text;
   } catch(e) {
     logger.warn("Gemini error: " + e.message);
@@ -235,6 +360,43 @@ async function callGemini(prompt) {
   }
 }
 
+// ── CLAUDE (Layer 2 review) ────────────────────────────────────────────────
+async function callClaude(prompt) {
+  if (!ANTHROPIC_KEY) return null;
+  try {
+    var res = await postJson(
+      "api.anthropic.com",
+      "/v1/messages",
+      {
+        model:      "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages:   [{ role: "user", content: prompt }],
+        tools:      [{ type: "web_search_20250305", name: "web_search" }]
+      },
+      {
+        "x-api-key":         ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01"
+      }
+    );
+    if (res.status < 200 || res.status >= 300) {
+      logger.warn("Claude HTTP " + res.status + ": " + res.body.slice(0,300));
+      return null;
+    }
+    var parsed = JSON.parse(res.body);
+    var text = (parsed.content||[])
+      .filter(function(b) { return b.type === "text"; })
+      .map(function(b) { return b.text; })
+      .join("");
+    if (!text) { logger.warn("Claude review returned no text"); return null; }
+    logger.debug("Claude review preview: " + text.slice(0,300));
+    return text;
+  } catch(e) {
+    logger.warn("Claude error: " + e.message);
+    return null;
+  }
+}
+
+// ── OPENAI FALLBACK ────────────────────────────────────────────────────────
 async function callOpenAI(prompt) {
   if (!OPENAI_KEY) return null;
   try {
@@ -254,40 +416,62 @@ async function callOpenAI(prompt) {
       { "Authorization": "Bearer " + OPENAI_KEY }
     );
     if (res.status < 200 || res.status >= 300) {
-      logger.warn("OpenAI HTTP " + res.status + ": " + res.body.slice(0, 300));
+      logger.warn("OpenAI HTTP " + res.status);
       return null;
     }
     var parsed = JSON.parse(res.body);
-    return ((parsed.choices || [])[0] || {}).message
-      ? parsed.choices[0].message.content
-      : null;
+    return ((parsed.choices||[])[0]||{}).message ? parsed.choices[0].message.content : null;
   } catch(e) {
     logger.warn("OpenAI error: " + e.message);
     return null;
   }
 }
 
+// ── TWO-LAYER AI ENRICHMENT ────────────────────────────────────────────────
+// Layer 1: Gemini — broad web research (finds owner, website, DBA)
+// Layer 2: Claude — validates owner, finds all emails/phones, social links
 async function aiSearchEnrich(caseData, debtorName) {
-  if (!GEMINI_KEY && !OPENAI_KEY) { logger.warn("No AI key configured"); return null; }
-  var prompt = buildGeminiPrompt(caseData, debtorName);
-  var text   = null;
+  if (!GEMINI_KEY && !OPENAI_KEY && !ANTHROPIC_KEY) {
+    logger.warn("No AI key configured");
+    return null;
+  }
+
+  // Layer 1: Gemini broad research
+  var geminiData = null;
   if (GEMINI_KEY) {
-    logger.info("Gemini enrichment: " + debtorName);
-    text = await callGemini(prompt);
+    logger.info("Gemini enrichment (layer 1): " + debtorName);
+    var geminiText = await callGemini(buildGeminiPrompt(caseData, debtorName));
+    geminiData = parseJsonFromText(geminiText);
+    if (!geminiData) logger.warn("Gemini parse failed for: " + debtorName);
   }
-  if (!text && OPENAI_KEY) {
+
+  // OpenAI fallback if Gemini completely fails
+  if (!geminiData && OPENAI_KEY) {
     logger.info("OpenAI fallback: " + debtorName);
-    text = await callOpenAI(prompt);
+    var openaiText = await callOpenAI(buildGeminiPrompt(caseData, debtorName));
+    geminiData = parseJsonFromText(openaiText);
   }
-  var result = parseJsonFromText(text);
-  if (!result) logger.warn("AI parse failed for: " + debtorName + " | raw: " + String(text||"").slice(0, 200));
+
+  // Layer 2: Claude review and gap-fill
+  var claudeData = null;
+  if (ANTHROPIC_KEY) {
+    logger.info("Claude review (layer 2): " + debtorName);
+    var claudeText = await callClaude(buildClaudeReviewPrompt(caseData, debtorName, geminiData));
+    claudeData = parseJsonFromText(claudeText);
+    if (!claudeData) logger.warn("Claude review parse failed for: " + debtorName);
+  }
+
+  // Merge both layers
+  var result = mergeEnrichmentResults(geminiData, claudeData);
+  if (!result) logger.warn("Both AI layers returned nothing for: " + debtorName);
   return result;
 }
 
+// ── GOOGLE PLACES ──────────────────────────────────────────────────────────
 async function googlePlaces(name, state) {
   if (!GOOGLE_KEY) return null;
   try {
-    var q   = encodeURIComponent(name + (state ? " "+state : ""));
+    var q   = encodeURIComponent(name + (state ? " " + state : ""));
     var res = await fetchUrl("https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input="+q+"&inputtype=textquery&fields=place_id,name,formatted_address,formatted_phone_number,website&key="+GOOGLE_KEY);
     var d   = JSON.parse(res.body);
     if (d.status !== "OK" || !d.candidates || !d.candidates.length) return null;
@@ -296,25 +480,22 @@ async function googlePlaces(name, state) {
       var r2 = await fetchUrl("https://maps.googleapis.com/maps/api/place/details/json?place_id="+pl.place_id+"&fields=name,formatted_address,formatted_phone_number,website,url&key="+GOOGLE_KEY);
       var d2 = JSON.parse(r2.body);
       if (d2.status === "OK" && d2.result) {
-        return { address: d2.result.formatted_address||"", phone: d2.result.formatted_phone_number||"", website: d2.result.website||"", mapsUrl: d2.result.url||"" };
+        return { address:d2.result.formatted_address||"", phone:d2.result.formatted_phone_number||"", website:d2.result.website||"", mapsUrl:d2.result.url||"" };
       }
     }
-    return { address: pl.formatted_address||"", phone: pl.formatted_phone_number||"", website: pl.website||"", mapsUrl: "" };
+    return { address:pl.formatted_address||"", phone:pl.formatted_phone_number||"", website:pl.website||"", mapsUrl:"" };
   } catch(e) { logger.warn("Google Places error: "+e.message); return null; }
 }
 
-// ── FIX: scrapeWebsite now extracts social links, contact form URL, and
-// guesses info@ from the domain as a reliable starting email ──
+// ── WEBSITE SCRAPER (with social links + info@ + contact form) ─────────────
 async function scrapeWebsite(url) {
   if (!url) return { emails:[], phones:[], ownerHints:[], socialLinks:{}, contactFormUrl:null };
   var result = { emails:[], phones:[], contactPageUrl:null, ownerHints:[], socialLinks:{}, contactFormUrl:null };
 
-  // Guess info@ from domain as a starting point — usually works
+  // Always derive info@ from domain as a fallback email
   try {
-    var domain = new URL(url).hostname.replace(/^www\./, "");
-    if (domain && domain.length <= 40) {
-      result.emails.push("info@" + domain);
-    }
+    var domain = new URL(url.startsWith("http") ? url : "https://"+url).hostname.replace(/^www\./,"");
+    if (domain && domain.length <= 40) result.emails.push("info@"+domain);
   } catch(e) {}
 
   try {
@@ -322,8 +503,7 @@ async function scrapeWebsite(url) {
     var homeText = stripHtml(home.body);
 
     // Emails and phones from homepage
-    var scrapedEmails = extractEmails(home.body);
-    scrapedEmails.forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+    extractEmails(home.body).forEach(function(e) { if (result.emails.indexOf(e)<0) result.emails.push(e); });
     result.phones = extractPhones(homeText);
 
     // Social media links
@@ -331,131 +511,117 @@ async function scrapeWebsite(url) {
       instagram: /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9._]{2,30})/i,
       facebook:  /(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?!sharer|share|dialog)([a-zA-Z0-9._\-]{2,50})/i,
       twitter:   /(?:https?:\/\/)?(?:www\.)?(?:twitter|x)\.com\/([a-zA-Z0-9._]{2,30})/i,
-      linkedin:  /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:company|in)\/([a-zA-Z0-9._\-]{2,50})/i,
+      linkedin:  /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:company|in)\/([a-zA-Z0-9._\-]{2,50})/i
     };
     Object.keys(socialPatterns).forEach(function(platform) {
       var match = home.body.match(socialPatterns[platform]);
       if (match && match[0]) {
         var link = match[0];
-        if (!link.startsWith("http")) link = "https://" + link.replace(/^\/\//, "");
+        if (!link.startsWith("http")) link = "https://" + link.replace(/^\/\//,"");
         result.socialLinks[platform] = link;
       }
     });
 
-    // Contact page detection
-    var cfMatch = home.body.match(/href=["']([^"']*(?:contact|reach-us|get-in-touch|connect)[^"']*)/i);
+    // Contact page
+    var cfMatch = home.body.match(/href=["']([^"']*(?:contact|reach-us|get-in-touch)[^"']*)/i);
     if (cfMatch) {
       var cfUrl = cfMatch[1];
-      if (cfUrl.startsWith("/")) { try { var b = new URL(url); cfUrl = b.origin + cfUrl; } catch(e) {} }
-      if (!cfUrl.startsWith("http")) cfUrl = url + "/" + cfUrl;
+      if (cfUrl.startsWith("/")) { try { var b=new URL(url); cfUrl=b.origin+cfUrl; } catch(e) {} }
+      if (!cfUrl.startsWith("http")) cfUrl = url+"/"+cfUrl;
       result.contactFormUrl = cfUrl;
       result.contactPageUrl = cfUrl;
     } else {
-      // Try /contact as fallback
       try {
-        var tryContact = new URL("/contact", url).href;
-        var cpTry = await fetchUrl(tryContact, { timeout: 5000 });
-        if (cpTry.status === 200) {
+        var tryContact = new URL("/contact", url.startsWith("http")?url:"https://"+url).href;
+        var cp = await fetchUrl(tryContact, { timeout: 5000 });
+        if (cp.status === 200) {
           result.contactFormUrl = tryContact;
           result.contactPageUrl = tryContact;
-          extractEmails(cpTry.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
-          extractPhones(stripHtml(cpTry.body)).forEach(function(p) { if (result.phones.indexOf(p) < 0) result.phones.push(p); });
+          extractEmails(cp.body).forEach(function(e) { if (result.emails.indexOf(e)<0) result.emails.push(e); });
+          extractPhones(stripHtml(cp.body)).forEach(function(p) { if (result.phones.indexOf(p)<0) result.phones.push(p); });
         }
       } catch(e) {}
     }
 
-    // Scrape the contact page if found via href match
-    if (result.contactPageUrl && result.contactPageUrl !== url && result.contactPageUrl !== result.contactFormUrl) {
+    // Scrape contact page if found via href
+    if (result.contactPageUrl && result.contactPageUrl !== url) {
       try {
         var cpPage = await fetchUrl(result.contactPageUrl, { timeout: 8000 });
-        extractEmails(cpPage.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
-        extractPhones(stripHtml(cpPage.body)).forEach(function(p) { if (result.phones.indexOf(p) < 0) result.phones.push(p); });
+        extractEmails(cpPage.body).forEach(function(e) { if (result.emails.indexOf(e)<0) result.emails.push(e); });
+        extractPhones(stripHtml(cpPage.body)).forEach(function(p) { if (result.phones.indexOf(p)<0) result.phones.push(p); });
       } catch(e) {}
     }
 
-    // Owner hints from homepage
+    // About page for owner hints
     var ownerPatterns = [
       /(?:owner|founder|director|president|ceo|managing member)[^<]{0,60}/gi,
       /(?:meet\s+(?:our\s+)?(?:owner|team|founder))[^<]{0,120}/gi
     ];
     ownerPatterns.forEach(function(p) {
       var m = home.body.match(p);
-      if (m) result.ownerHints = result.ownerHints.concat(m.slice(0, 3));
+      if (m) result.ownerHints = result.ownerHints.concat(m.slice(0,3));
     });
 
-    // About page for additional owner hints and emails
     try {
-      var aboutUrl = new URL("/about", url).href;
+      var aboutUrl = new URL("/about", url.startsWith("http")?url:"https://"+url).href;
       var ap = await fetchUrl(aboutUrl, { timeout: 6000 });
       if (ap.status === 200) {
-        extractEmails(ap.body).forEach(function(e) { if (result.emails.indexOf(e) < 0) result.emails.push(e); });
+        extractEmails(ap.body).forEach(function(e) { if (result.emails.indexOf(e)<0) result.emails.push(e); });
         ownerPatterns.forEach(function(p) {
           var m = ap.body.match(p);
-          if (m) result.ownerHints = result.ownerHints.concat(m.slice(0, 3));
+          if (m) result.ownerHints = result.ownerHints.concat(m.slice(0,3));
         });
       }
     } catch(e) {}
 
-    result.emails = result.emails.slice(0, 8);
-    result.phones = result.phones.slice(0, 5);
+    result.emails = result.emails.slice(0,8);
+    result.phones = result.phones.slice(0,5);
 
-  } catch(e) { logger.warn("Scrape error: " + e.message); }
+  } catch(e) { logger.warn("Scrape error: "+e.message); }
   return result;
 }
 
-// ── ATTORNEY / TRUSTEE DETECTION ──
+// ── ATTORNEY / TRUSTEE DETECTION ───────────────────────────────────────────
 var NAME_SUFFIX_PATTERN    = /,?\s*(esq\.?|j\.d\.?|attorney at law|p\.c\.|pllc|llp)$/i;
 var ATTORNEY_TITLE_PATTERN = /\b(attorney|counsel|esquire|esq|solicitor|lawyer|legal counsel|debtor.s attorney|attorney for debtor|attorney at law)\b/i;
 var LAW_FIRM_PATTERN       = /\b(law|llp|pllc|p\.c\.|attorneys|legal|counsel|esq|firm|solicitor)\b/i;
 var TRUSTEE_NAME_PATTERN   = /\b(trustee|us trustee|u\.s\. trustee|united states trustee)\b/i;
 
 function isAttorneyOrTrustee(name, title, org, knownAttorneyNames) {
-  var nameLower  = (name  || "").toLowerCase().trim();
-  var titleLower = (title || "").toLowerCase();
-  var orgLower   = (org   || "").toLowerCase();
-  if (TRUSTEE_NAME_PATTERN.test(nameLower))    return true;
-  if (NAME_SUFFIX_PATTERN.test(name))          return true;
-  if (ATTORNEY_TITLE_PATTERN.test(titleLower)) return true;
-  if (LAW_FIRM_PATTERN.test(orgLower))         return true;
-  var nameClean = nameLower.replace(NAME_SUFFIX_PATTERN, "").trim();
-  var isKnown = (knownAttorneyNames || []).some(function(known) {
-    return known.length > 3 && (known.includes(nameClean) || nameClean.includes(known));
+  var s = [(name||""), (title||""), (org||"")].join(" ");
+  if (TRUSTEE_NAME_PATTERN.test(s))    return true;
+  if (NAME_SUFFIX_PATTERN.test(name))  return true;
+  if (ATTORNEY_TITLE_PATTERN.test(s))  return true;
+  if (LAW_FIRM_PATTERN.test(org||""))  return true;
+  var nameClean = (name||"").toLowerCase().replace(NAME_SUFFIX_PATTERN,"").trim();
+  return (knownAttorneyNames||[]).some(function(k) {
+    return k.length>3 && (k.includes(nameClean)||nameClean.includes(k));
   });
-  if (isKnown) return true;
-  return false;
 }
 
-// ── TRUSTEE LOOKUP — database-backed ──
+// ── TRUSTEE LOOKUP — database-backed ───────────────────────────────────────
 async function lookupTrusteeFromDirectory(trusteeName, courtId) {
   const { query: dbQuery } = require("./db/connection");
   if (trusteeName) {
-    var nameLower = trusteeName.toLowerCase().trim();
-    if (nameLower === "us trustee" || nameLower === "u.s. trustee" || nameLower === "united states trustee") {
-      trusteeName = null;
-    }
+    var nl = trusteeName.toLowerCase().trim();
+    if (nl==="us trustee"||nl==="u.s. trustee"||nl==="united states trustee") trusteeName=null;
   }
   try {
     if (trusteeName) {
       var lastName = trusteeName.split(" ").slice(-1)[0].toLowerCase();
-      if (lastName.length > 2) {
-        var nameResult = await dbQuery(
-          `SELECT * FROM trustees WHERE active=TRUE AND LOWER(full_name) LIKE $1 ORDER BY full_name LIMIT 1`,
-          [`%${lastName}%`]
-        );
-        if (nameResult.rows.length > 0) {
-          var t = nameResult.rows[0];
-          return { name:t.full_name, email:t.email||null, phone:t.phone||null, district:t.district_code, source:"USTP Sub-V Trustee Directory (justice.gov)", url:t.source_url||"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:"HIGH", verified_at:t.source_verified_at||null };
+      if (lastName.length>2) {
+        var nr = await dbQuery("SELECT * FROM trustees WHERE active=TRUE AND LOWER(full_name) LIKE $1 ORDER BY full_name LIMIT 1", ["%"+lastName+"%"]);
+        if (nr.rows.length>0) {
+          var t=nr.rows[0];
+          return { name:t.full_name, email:t.email||null, phone:t.phone||null, district:t.district_code, source:"USTP Sub-V Trustee Directory (justice.gov)", url:t.source_url||"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:"HIGH" };
         }
       }
     }
     if (courtId) {
-      var districtResult = await dbQuery(
-        `SELECT * FROM trustees WHERE active=TRUE AND district_code=$1 ORDER BY full_name`,
-        [courtId.toLowerCase()]
-      );
-      if (districtResult.rows.length > 0) {
-        var list = districtResult.rows, first = list[0];
-        return { name:trusteeName||"Not yet assigned — see district directory", email:first.email||null, phone:first.phone||null, district:courtId, allTrustees:list.map(function(t){ return {name:t.full_name,email:t.email,phone:t.phone}; }), source:"USTP Sub-V Trustee Directory (justice.gov)", url:"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:trusteeName?"MEDIUM":"LOW" };
+      var dr = await dbQuery("SELECT * FROM trustees WHERE active=TRUE AND district_code=$1 ORDER BY full_name", [courtId.toLowerCase()]);
+      if (dr.rows.length>0) {
+        var list=dr.rows, first=list[0];
+        return { name:trusteeName||"Not yet assigned — see district directory", email:first.email||null, phone:first.phone||null, district:courtId, allTrustees:list.map(function(t){return{name:t.full_name,email:t.email,phone:t.phone};}), source:"USTP Sub-V Trustee Directory (justice.gov)", url:"https://www.justice.gov/ust/list-chapter-11-subchapter-v-case-case-trustees", confidence:trusteeName?"MEDIUM":"LOW" };
       }
     }
   } catch(e) { logger.warn("Trustee DB lookup failed: "+e.message); }
@@ -496,7 +662,7 @@ var STATE_MAP = {
   ianb:"Iowa",iasb:"Iowa",innb:"Indiana",insb:"Indiana",okeb:"Oklahoma",oknb:"Oklahoma",okwb:"Oklahoma"
 };
 
-// ── MAIN ENRICHMENT ──
+// ── MAIN ENRICHMENT ────────────────────────────────────────────────────────
 async function enrichCase(caseData) {
   var debtor  = getDebtorName(caseData);
   var courtId = caseData.courtId || caseData.court_id || "";
@@ -508,16 +674,15 @@ async function enrichCase(caseData) {
 
   var result = { company:null, aiData:null, trustee:null, attorneys:[], principals:[], warnings:[] };
 
-  var knownAttorneyNames = (caseData.attorneys || []).map(function(a) {
-    return (a.name || "").toLowerCase().replace(NAME_SUFFIX_PATTERN, "").trim();
-  }).filter(function(n) { return n.length > 3; });
+  var knownAttorneyNames = (caseData.attorneys||[]).map(function(a) {
+    return (a.name||"").toLowerCase().replace(NAME_SUFFIX_PATTERN,"").trim();
+  }).filter(function(n) { return n.length>3; });
 
-  // 1. AI search
+  // Layer 1 + 2: AI enrichment
   var aiData = await aiSearchEnrich(caseData, debtor);
   result.aiData = aiData;
 
-  // 2. FIX: Google Places searches trade name first — it has far better Maps
-  // coverage than holding company legal names. Falls back to legal name.
+  // FIX: Google Places searches trade name first — far better Maps coverage
   var tradeName = (aiData && aiData.tradeName) || null;
   var placesSearchName = tradeName || debtor;
   logger.info("Google Places: " + placesSearchName + (tradeName ? " (trade name)" : ""));
@@ -527,7 +692,7 @@ async function enrichCase(caseData) {
     places = await googlePlaces(debtor, state);
   }
 
-  // 3. Merge company data
+  // Merge company data
   var website  = (aiData && aiData.website)    || (places && places.website)  || null;
   var website2 = (aiData && aiData.altWebsite) || null;
 
@@ -538,19 +703,22 @@ async function enrichCase(caseData) {
     phone:            (places && places.phone)   || (aiData && aiData.phone)   || null,
     website:          website,
     altWebsite:       website2,
-    mapsUrl:          (places && places.mapsUrl) || null,
-    businessType:     (aiData && aiData.businessType)     || null,
+    mapsUrl:          (aiData && aiData.googleMapsUrl) || (places && places.mapsUrl) || null,
+    businessType:     (aiData && (aiData.businessType||aiData.businessDescription)) || null,
     bankruptcyReason: (aiData && aiData.bankruptcyReason) || null,
+    stillOperating:   (aiData && aiData.stillOperating !== undefined) ? aiData.stillOperating : true,
     emails:           [],
     scrapedPhones:    [],
     ownerHints:       [],
     socialLinks:      {},
-    contactFormUrl:   null,
+    contactFormUrl:   (aiData && aiData.contactFormUrl) || null,
+    bestOutreachChannel: (aiData && aiData.bestOutreachChannel) || "manual",
+    redFlags:         (aiData && aiData.redFlags) || [],
     sources:          (aiData && aiData.sources) || [],
     confidence:       (aiData && aiData.confidence) || "LOW"
   };
 
-  // 4. Scrape websites — trade name site first (better contact info)
+  // Scrape trade name website first (better contact info)
   var tradeWebsite = (places && places.website) || null;
   if (tradeWebsite && tradeWebsite !== website) {
     var wt = await scrapeWebsite(tradeWebsite);
@@ -559,52 +727,55 @@ async function enrichCase(caseData) {
     result.company.contactPageUrl= wt.contactPageUrl;
     result.company.ownerHints    = wt.ownerHints    || [];
     result.company.socialLinks   = wt.socialLinks   || {};
-    result.company.contactFormUrl= wt.contactFormUrl|| null;
+    if (!result.company.contactFormUrl && wt.contactFormUrl) result.company.contactFormUrl = wt.contactFormUrl;
   }
   if (website) {
     var w1 = await scrapeWebsite(website);
-    w1.emails.forEach(function(e) { if (result.company.emails.indexOf(e) < 0) result.company.emails.push(e); });
-    w1.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p) < 0) result.company.scrapedPhones.push(p); });
-    w1.ownerHints.forEach(function(h) { if (result.company.ownerHints.indexOf(h) < 0) result.company.ownerHints.push(h); });
+    w1.emails.forEach(function(e) { if (result.company.emails.indexOf(e)<0) result.company.emails.push(e); });
+    w1.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p)<0) result.company.scrapedPhones.push(p); });
+    w1.ownerHints.forEach(function(h) { if (result.company.ownerHints.indexOf(h)<0) result.company.ownerHints.push(h); });
     if (!result.company.contactFormUrl && w1.contactFormUrl) result.company.contactFormUrl = w1.contactFormUrl;
     if (!result.company.contactPageUrl && w1.contactPageUrl) result.company.contactPageUrl = w1.contactPageUrl;
-    Object.keys(w1.socialLinks || {}).forEach(function(pl) {
-      if (!result.company.socialLinks[pl]) result.company.socialLinks[pl] = w1.socialLinks[pl];
-    });
+    Object.keys(w1.socialLinks||{}).forEach(function(pl) { if (!result.company.socialLinks[pl]) result.company.socialLinks[pl]=w1.socialLinks[pl]; });
   }
   if (website2) {
     var w2 = await scrapeWebsite(website2);
-    w2.emails.forEach(function(e) { if (result.company.emails.indexOf(e) < 0) result.company.emails.push(e); });
-    w2.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p) < 0) result.company.scrapedPhones.push(p); });
-    w2.ownerHints.forEach(function(h) { if (result.company.ownerHints.indexOf(h) < 0) result.company.ownerHints.push(h); });
-    Object.keys(w2.socialLinks || {}).forEach(function(pl) {
-      if (!result.company.socialLinks[pl]) result.company.socialLinks[pl] = w2.socialLinks[pl];
-    });
-    if (!result.company.contactFormUrl && w2.contactFormUrl) result.company.contactFormUrl = w2.contactFormUrl;
+    w2.emails.forEach(function(e) { if (result.company.emails.indexOf(e)<0) result.company.emails.push(e); });
+    w2.phones.forEach(function(p) { if (result.company.scrapedPhones.indexOf(p)<0) result.company.scrapedPhones.push(p); });
+    Object.keys(w2.socialLinks||{}).forEach(function(pl) { if (!result.company.socialLinks[pl]) result.company.socialLinks[pl]=w2.socialLinks[pl]; });
   }
 
-  // 5. Build domains for email guessing
+  // Merge social links from Claude layer into company
+  if (aiData) {
+    if (aiData.instagram && !result.company.socialLinks.instagram) result.company.socialLinks.instagram = aiData.instagram;
+    if (aiData.facebook  && !result.company.socialLinks.facebook)  result.company.socialLinks.facebook  = aiData.facebook;
+    if (aiData.linkedInCompany && !result.company.socialLinks.linkedin) result.company.socialLinks.linkedin = aiData.linkedInCompany;
+    if (aiData.contactFormUrl && !result.company.contactFormUrl) result.company.contactFormUrl = aiData.contactFormUrl;
+  }
+
+  // Build domains for email guessing
   var domains = [];
   [website, website2, tradeWebsite].forEach(function(w) {
     if (!w) return;
-    try { var d = new URL(w).hostname.replace(/^www\./, ""); if (d && d.length <= 40 && domains.indexOf(d) < 0) domains.push(d); } catch(e) {}
+    try { var d=new URL(w.startsWith("http")?w:"https://"+w).hostname.replace(/^www\./,""); if(d&&d.length<=40&&domains.indexOf(d)<0)domains.push(d); } catch(e){}
   });
   result.company.emails.forEach(function(e) {
-    var parts = e.split("@");
-    if (parts.length === 2 && parts[1].length <= 40 && domains.indexOf(parts[1]) < 0) domains.push(parts[1]);
+    var parts=e.split("@"); if(parts.length===2&&parts[1].length<=40&&domains.indexOf(parts[1])<0)domains.push(parts[1]);
   });
 
   function makePrincipal(name, title, email, phone, isPrimary, source, confidence) {
-    var guesses = [];
-    domains.forEach(function(d) { guessEmails(name, d).forEach(function(g) { guesses.push(g); }); });
+    var guesses=[];
+    domains.forEach(function(d) { guessEmails(name,d).forEach(function(g){guesses.push(g);}); });
     return { name:name, role:title||"Contact", title:title||null, email:email||null, phone:phone||null, emailGuesses:guesses, domains:domains, isPrimary:isPrimary||false, source:source||"Public web search", confidence:confidence||"MEDIUM", note:"Verify before outreach" };
   }
 
-  // 6. Build principals — filter attorneys and trustees out
+  // Build principals — filter attorneys and trustees
   result.principals = [];
   if (aiData && aiData.ownerName) {
     if (!isAttorneyOrTrustee(aiData.ownerName, aiData.ownerTitle, null, knownAttorneyNames)) {
-      result.principals.push(makePrincipal(aiData.ownerName, aiData.ownerTitle||"Owner / Operator", aiData.ownerEmail, aiData.ownerPhone||result.company.phone, true, "Public web search", aiData.confidence));
+      var ownerPhone = aiData.ownerPhone || (aiData.ownerPhones&&aiData.ownerPhones[0]&&aiData.ownerPhones[0].phone) || result.company.phone;
+      var ownerEmail = aiData.ownerEmail || (aiData.ownerEmails&&aiData.ownerEmails[0]&&aiData.ownerEmails[0].email);
+      result.principals.push(makePrincipal(aiData.ownerName, aiData.ownerTitle||"Owner / Operator", ownerEmail, ownerPhone, true, "Public web search", aiData.confidence));
     }
   }
   if (aiData && aiData.petitionSigner && aiData.petitionSigner !== (aiData.ownerName||"")) {
@@ -614,19 +785,19 @@ async function enrichCase(caseData) {
   }
   if (aiData && aiData.otherContacts) {
     aiData.otherContacts.forEach(function(oc) {
-      if (!oc || !oc.name) return;
+      if (!oc||!oc.name) return;
       if (isAttorneyOrTrustee(oc.name, oc.title||oc.role, oc.organization||oc.firm, knownAttorneyNames)) return;
       result.principals.push(makePrincipal(oc.name, oc.role, oc.email, oc.phone, false, "Public web search", "MEDIUM"));
     });
   }
   if (!result.principals.length) result.warnings.push("No owner or principal found in public search — manual review needed.");
 
-  // 7. Trustee — database lookup
+  // Trustee lookup
   var trusteeName = (caseData.trustee && caseData.trustee.name) ? caseData.trustee.name : null;
   var td = await lookupTrusteeFromDirectory(trusteeName, courtId);
   result.trustee = Object.assign({}, caseData.trustee||{}, td);
 
-  // 8. Attorneys with state bar links
+  // Attorneys with state bar links
   result.attorneys = (caseData.attorneys||[]).map(function(a) {
     return Object.assign({}, a, { barUrl:STATE_BAR[courtId]||"https://www.americanbar.org/groups/legal_services/flh-home/flh-lawyer-locator/", note:"Search state bar directory for verified email and phone" });
   });
