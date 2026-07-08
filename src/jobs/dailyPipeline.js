@@ -1,19 +1,20 @@
 "use strict";
-const { acquireLock, releaseLock }                    = require("./pipelineLock");
-const { discoverSubchapterVCases }                    = require("../courtListenerSearchService");
-const { hydrateDocket }                               = require("../caseHydrationService");
-const { enrichCase }                                  = require("../enrichmentService");
-const { upsertCase, flagForReview }                   = require("../data/caseRepository");
-const { upsertOrganization }                          = require("../data/organizationRepository");
-const { upsertContact, linkContactToCase }            = require("../data/contactRepository");
-const { pushCaseToClose, getContactsForCase }         = require("../integrations/closeIntegration");
-const { query }                                       = require("../db/connection");
-const logger                                          = require("../logger");
+const { acquireLock, releaseLock }         = require("./pipelineLock");
+const { discoverSubchapterVCases }         = require("../courtListenerSearchService");
+const { hydrateDocket }                    = require("../caseHydrationService");
+const { enrichCase }                       = require("../enrichmentService");
+const { upsertCase, flagForReview }        = require("../data/caseRepository");
+const { upsertOrganization }               = require("../data/organizationRepository");
+const { upsertContact, linkContactToCase } = require("../data/contactRepository");
+const { pushCaseToClose, getContactsForCase } = require("../integrations/closeIntegration");
+const { query }                            = require("../db/connection");
+const logger                               = require("../logger");
 
-const LOOKBACK_DAYS  = parseInt(process.env.DAILY_SEARCH_LOOKBACK_DAYS || "3", 10);
-const MAX_CASES      = parseInt(process.env.DAILY_SEARCH_MAX_CASES     || "30", 10);
-const MAX_ENRICHMENTS = parseInt(process.env.DAILY_ENRICH_MAX || "2", 10);
-const PUSH_TO_CLOSE  = process.env.PUSH_TO_CLOSE !== "false";
+const LOOKBACK_DAYS   = parseInt(process.env.DAILY_SEARCH_LOOKBACK_DAYS || "3",  10);
+const MAX_CASES       = parseInt(process.env.DAILY_SEARCH_MAX_CASES     || "10", 10);
+// Enrich every new case — no cap. Set DAILY_ENRICH_MAX in Render env to limit if needed.
+const MAX_ENRICHMENTS = parseInt(process.env.DAILY_ENRICH_MAX           || "999", 10);
+const PUSH_TO_CLOSE   = process.env.PUSH_TO_CLOSE !== "false";
 
 function getDateString(date) {
   return date.toISOString().slice(0, 10);
@@ -37,7 +38,7 @@ async function getLastSearchDate() {
   return result.rows[0]?.search_end_date || null;
 }
 
-// ── Check which discovered docket IDs are already in the DB ──
+// ── Pre-check which docket IDs already exist in DB ──────────────────────────
 async function getExistingDocketIds(docketIds) {
   if (!docketIds.length) return new Set();
   try {
@@ -52,14 +53,11 @@ async function getExistingDocketIds(docketIds) {
   }
 }
 
-// ── Clean extracted names ──
+// ── Name cleaning ──────────────────────────────────────────────────────────
 function cleanName(name) {
   if (!name) return name;
-  // Remove trailing ", Debtor" or "(Debtor)"
-  name = name.replace(/,?\s*(?:,\s*)?debtor\s*$/i, "").trim();
-  // Remove trailing "Signature"
+  name = name.replace(/,?\s*\(?\s*debtor\s*\)?\s*$/i, "").trim();
   name = name.replace(/\s+Signature\s*$/i, "").trim();
-  // Fix exact duplications: "John Smith John Smith" → "John Smith"
   const words = name.split(/\s+/);
   if (words.length >= 4) {
     const half = Math.floor(words.length / 2);
@@ -70,6 +68,7 @@ function cleanName(name) {
   return name.trim();
 }
 
+// ── Save hydrated case to DB ───────────────────────────────────────────────
 async function saveCaseToDb(hydratedCase, runId, dryRun) {
   if (dryRun) {
     logger.info("[DRY RUN] Would save: " + hydratedCase.caseName + " (" + hydratedCase.docketId + ")");
@@ -102,10 +101,10 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
   }
 
   // Save principals from petition text extraction
+  const US_TRUSTEE = /u\.?s\.?\s*trustee|united states trustee|department of justice/i;
   for (const p of (hydratedCase.principals || [])) {
     const pName = cleanName(p.name);
     if (!pName || pName.length < 3) continue;
-
     const confidence = p.confidence === "HIGH" ? 0.9 : p.confidence === "MEDIUM" ? 0.6 : 0.3;
     const contact = await upsertContact({
       full_name:                pName,
@@ -130,18 +129,12 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
   }
 
   // Save attorneys (excluding US Trustee)
-  const US_TRUSTEE = /u\.?s\.?\s*trustee|united states trustee|department of justice/i;
   for (const a of (hydratedCase.attorneys || [])) {
     if (!a.name) continue;
     if (US_TRUSTEE.test(a.name) || US_TRUSTEE.test(a.firm || "")) continue;
-
     let firmId = null;
     if (a.firm) {
-      const firm = await upsertOrganization({
-        organization_name: a.firm,
-        organization_type: "law_firm",
-        phone:             a.phone || null,
-      });
+      const firm = await upsertOrganization({ organization_name: a.firm, organization_type: "law_firm", phone: a.phone || null });
       firmId = firm?.id || null;
     }
     const contact = await upsertContact({
@@ -193,7 +186,8 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
   return { isNew, caseDbId, orgId };
 }
 
-// ── Auto-enrich a new case using Gemini ──
+// ── Auto-enrich a new case ─────────────────────────────────────────────────
+// Calls Gemini (layer 1) + Claude (layer 2), saves enriched owner to DB contacts
 async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
   const caseName = hydratedCase.debtorName || hydratedCase.caseName || "";
   if (!caseName || caseName.length < 3) {
@@ -211,18 +205,27 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
       return enriched;
     }
 
-    // Find the primary owner (isPrimary=true, or first HIGH confidence)
+    // Find the primary owner
     const owner = enriched.principals.find(function(p) { return p.isPrimary && p.name; })
                || enriched.principals.find(function(p) { return p.confidence === "HIGH" && p.name; })
                || enriched.principals[0];
 
     if (!owner || !owner.name || owner.name.length < 3) {
-      logger.info("Auto-enrich: owner name too short or missing for " + caseName);
+      logger.info("Auto-enrich: owner name too short for " + caseName);
       return enriched;
     }
 
     const ownerName = cleanName(owner.name);
     if (!ownerName) return enriched;
+
+    // Get best email — confirmed first, then guessed
+    const ai       = enriched.aiData || {};
+    const emails   = ai.ownerEmails  || [];
+    const bestEmail = (emails.find(function(e) { return e.confidence==="confirmed"; }) || emails[0] || {}).email || owner.email || null;
+
+    // Get best phone — direct/mobile first
+    const phones    = ai.ownerPhones || [];
+    const bestPhone = (phones.find(function(p) { return p.type==="mobile"||p.type==="direct"; }) || phones[0] || {}).phone || owner.phone || null;
 
     const confidence = owner.confidence === "HIGH" ? 0.9 : 0.6;
 
@@ -231,11 +234,11 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
       title:                    cleanName(owner.title || owner.role) || "Owner",
       contact_type:             "principal",
       organization_id:          orgId,
-      primary_email:            owner.email || null,
-      primary_email_status:     owner.email ? "unverified" : null,
+      primary_email:            bestEmail,
+      primary_email_status:     bestEmail ? "unverified" : null,
       primary_email_confidence: confidence,
       primary_email_inferred:   false,
-      primary_phone:            owner.phone || null,
+      primary_phone:            bestPhone,
       overall_confidence_score: confidence,
       verification_status:      "unverified",
     });
@@ -256,12 +259,10 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
   }
 }
 
+// ── Process one discovered case ────────────────────────────────────────────
 async function processCase(discovered, runId, dryRun) {
   const docketId = discovered.docketId;
-  if (!docketId) {
-    logger.warn("Skipping case with no docketId");
-    return null;
-  }
+  if (!docketId) { logger.warn("Skipping case with no docketId"); return null; }
 
   logger.info("Processing case: " + (discovered.caseName || docketId));
 
@@ -282,6 +283,7 @@ async function processCase(discovered, runId, dryRun) {
   }
 }
 
+// ── Main pipeline ──────────────────────────────────────────────────────────
 async function runDailyPipeline(opts) {
   opts = opts || {};
   const dryRun      = opts.dryRun      || false;
@@ -301,9 +303,7 @@ async function runDailyPipeline(opts) {
 
   logger.info("Daily pipeline starting — " + from + " to " + to + " | dry: " + dryRun + " | close: " + (PUSH_TO_CLOSE && !dryRun));
 
-  const run = await acquireLock({
-    runType: "daily", startDate: from, endDate: to, triggeredBy, dryRun,
-  });
+  const run = await acquireLock({ runType: "daily", startDate: from, endDate: to, triggeredBy, dryRun });
   if (!run) return { error: "Pipeline already running — skipped" };
 
   const stats = {
@@ -322,34 +322,28 @@ async function runDailyPipeline(opts) {
   };
 
   try {
-    // ── SEARCH ──
-    const discovered = await discoverSubchapterVCases({
-      dateFrom: from, dateTo: to, court, maxPages: 10,
-    });
-
+    // Discover cases
+    const discovered = await discoverSubchapterVCases({ dateFrom: from, dateTo: to, court, maxPages: 10 });
     stats.cases_found = discovered.length;
     logger.info("Discovered " + discovered.length + " cases");
 
-    // ── PRE-FILTER: find which docketIds are already in DB ──
-    const allDocketIds = discovered.map(function(d) { return d.docketId; }).filter(Boolean);
-    const existingIds  = await getExistingDocketIds(allDocketIds);
+    // Pre-filter: identify which are already in DB
+    const allDocketIds  = discovered.map(function(d) { return d.docketId; }).filter(Boolean);
+    const existingIds   = await getExistingDocketIds(allDocketIds);
+    const newDiscovered = discovered.filter(function(d) { return !existingIds.has(String(d.docketId)); });
+    const oldDiscovered = discovered.filter(function(d) { return  existingIds.has(String(d.docketId)); });
 
-    // Prioritize genuinely new cases — process them first, then existing up to cap
-    const newDiscovered      = discovered.filter(function(d) { return !existingIds.has(String(d.docketId)); });
-    const existingDiscovered = discovered.filter(function(d) { return existingIds.has(String(d.docketId)); });
+    logger.info("New: " + newDiscovered.length + " | Already in DB: " + oldDiscovered.length);
 
-    logger.info("New: " + newDiscovered.length + " | Already in DB: " + existingDiscovered.length);
-
-    // Take up to MAX_CASES, new cases first
-    const toProcess = newDiscovered.concat(existingDiscovered).slice(0, MAX_CASES);
+    // Process new cases first, then existing up to MAX_CASES cap
+    const toProcess = newDiscovered.concat(oldDiscovered).slice(0, MAX_CASES);
     if (discovered.length > MAX_CASES) {
-      logger.warn("Capped at " + MAX_CASES + " cases (" + newDiscovered.length + " new, " + Math.max(0, MAX_CASES - newDiscovered.length) + " existing)");
+      logger.warn("Capped at " + MAX_CASES + " cases");
     }
 
     const newCasesForClose = [];
     let enrichCount = 0;
 
-    // ── PROCESS CASES ──
     for (const d of toProcess) {
       const result = await processCase(d, run.id, dryRun);
       if (!result) continue;
@@ -360,62 +354,63 @@ async function runDailyPipeline(opts) {
       } else if (result.isNew) {
         stats.new_cases_created++;
 
-        // ── AUTO-ENRICH new cases up to the cap ──
+        // Auto-enrich every new case (Gemini layer 1 + Claude layer 2)
+        let enrichedData = null;
         if (!dryRun && enrichCount < MAX_ENRICHMENTS && result.caseDbId && result.hydrated) {
           stats.enrichments_attempted++;
-          const enriched = await autoEnrichCase(result.hydrated, result.caseDbId, result.orgId);
-          if (enriched && enriched.principals && enriched.principals.length > 0) {
+          enrichedData = await autoEnrichCase(result.hydrated, result.caseDbId, result.orgId);
+          if (enrichedData && enrichedData.principals && enrichedData.principals.length > 0) {
             stats.enrichments_succeeded++;
           }
           enrichCount++;
-
-          // Rate limit pause between enrichments
           await new Promise(function(r) { setTimeout(r, 1000); });
         }
 
-        // Queue for Close push if Sub-V confirmed
-        if (result.caseDbId && result.isNew) {
+        // Queue ALL new cases for Close — no isLikely gate
+        if (result.caseDbId) {
           newCasesForClose.push({
-            caseDbId: result.caseDbId,
-            hydrated: result.hydrated,
+            caseDbId:     result.caseDbId,
+            hydrated:     result.hydrated,
+            enrichedData: enrichedData  // pass merged Gemini+Claude data to Close
           });
         }
       } else {
         stats.existing_cases_updated++;
       }
 
-      // Respect CourtListener rate limits between hydrations
+      // Pause between cases to respect CourtListener rate limits
       await new Promise(function(r) { setTimeout(r, 5000); });
     }
 
-    // ── PUSH NEW CASES TO CLOSE ──
+    // Push new cases to Close
     if (PUSH_TO_CLOSE && !dryRun && newCasesForClose.length > 0) {
-      logger.info("Pushing " + newCasesForClose.length + " new Sub-V cases to Close CRM");
+      logger.info("Pushing " + newCasesForClose.length + " new cases to Close CRM");
 
       for (const item of newCasesForClose) {
         await new Promise(function(r) { setTimeout(r, 500); });
 
-        // Get all contacts including enriched principal saved during auto-enrich
         const contacts = await getContactsForCase(item.caseDbId, query);
 
-        // Build case row from hydrated data
         const caseRow = {
-          case_name:                  (item.hydrated.caseName   || "").replace(/,?\s*debtor\s*$/i, "").trim(),
-          debtor_name:                (item.hydrated.debtorName || "").replace(/,?\s*debtor\s*$/i, "").trim(),
+          case_name:                  cleanName(item.hydrated.caseName   || ""),
+          debtor_name:                cleanName(item.hydrated.debtorName || ""),
           case_number:                item.hydrated.docketNumber   || "",
           court_id:                   item.hydrated.courtId        || "",
           district:                   null,
           state:                      null,
           petition_date:              item.hydrated.dateFiled       || null,
-          is_subchapter_v:            item.hydrated.subchapterV?.isLikely || false,
+          is_subchapter_v:            true,  // all cases in pipeline are Sub-V
           subchapterv_confidence:     item.hydrated.subchapterV?.confidence || null,
           courtlistener_absolute_url: item.hydrated.absoluteUrl    || null,
           assigned_judge:             item.hydrated.assignedTo     || null,
-          website:                    null,
+          website:                    item.enrichedData?.website   || item.enrichedData?.aiData?.website || null,
           address:                    item.hydrated.debtor?.address || null,
         };
 
-        const closeResult = await pushCaseToClose(caseRow, contacts);
+        // Pass enrichedData (merged Gemini+Claude) for enhanced notes and multi-email/phone
+        const enrichmentForClose = item.enrichedData?.aiData || item.enrichedData || null;
+
+        const closeResult = await pushCaseToClose(caseRow, contacts, enrichmentForClose);
         if (closeResult.success)      stats.close_pushed++;
         else if (closeResult.skipped) stats.close_skipped++;
         else                          stats.close_errors++;
