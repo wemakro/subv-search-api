@@ -42,7 +42,15 @@ async function runMigrations() {
     await query(`CREATE INDEX IF NOT EXISTS idx_cases_close_lead_id ON cases(close_lead_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_cases_is_subchapter_v ON cases(is_subchapter_v)`);
 
-    logger.info("DB migrations OK — close_lead_id, close_pushed_at, is_subchapter_v columns ready");
+    // enrichment_attempts columns needed by enrichmentStore.js
+    await query(`ALTER TABLE enrichment_attempts ADD COLUMN IF NOT EXISTS case_id INTEGER`);
+    await query(`ALTER TABLE enrichment_attempts ADD COLUMN IF NOT EXISTS status TEXT`);
+    await query(`ALTER TABLE enrichment_attempts ADD COLUMN IF NOT EXISTS source TEXT`);
+    await query(`ALTER TABLE enrichment_attempts ADD COLUMN IF NOT EXISTS enrichment_json JSONB`);
+    await query(`ALTER TABLE enrichment_attempts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_enrichment_case_id ON enrichment_attempts(case_id)`);
+
+    logger.info("DB migrations OK — all columns ready");
   } catch(e) {
     logger.warn("DB migration warning (non-fatal): " + e.message);
   }
