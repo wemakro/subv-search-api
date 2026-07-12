@@ -111,14 +111,36 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
     "SELECT id FROM cases WHERE courtlistener_docket_id = $1",
     [hydratedCase.docketId]
   );
-  const isNew = existing.rows.length === 0;
+  let isNew = existing.rows.length === 0;
+
+  // DB-level dedupe: same company can appear under two docket IDs
+  // (three search templates return different docket entries for one case).
+  // If a different docket already has this case_number, treat as existing.
+  if (isNew && hydratedCase.docketNumber && hydratedCase.docketNumber.length > 4) {
+    const dupByCaseNo = await query(
+      "SELECT id FROM cases WHERE case_number = $1 LIMIT 1",
+      [hydratedCase.docketNumber]
+    ).catch(() => ({ rows: [] }));
+    if (dupByCaseNo.rows.length > 0) {
+      logger.info("Dedupe: case_number " + hydratedCase.docketNumber
+        + " already in DB (id " + dupByCaseNo.rows[0].id + ") — skipping duplicate docket " + hydratedCase.docketId);
+      return { isNew: false, caseDbId: dupByCaseNo.rows[0].id, orgId: null };
+    }
+  }
 
   const savedCase = await upsertCase(hydratedCase);
   if (!savedCase) throw new Error("upsertCase returned null");
   const caseDbId = savedCase.id;
 
-  // Save is_subchapter_v flag
-  const isSubV = hydratedCase.subchapterV?.isLikely === true;
+  // Save is_subchapter_v flag — THREE STATES:
+  //   true  = confirmed Sub-V (isLikely with MEDIUM/HIGH confidence)
+  //   false = confirmed NOT Sub-V (wrong chapter — confidence NONE)
+  //   NULL  = unclassified/uncertain (LOW confidence) → re-checked later, never buried
+  const sv = hydratedCase.subchapterV || {};
+  let isSubV = null;
+  if (sv.isLikely === true) isSubV = true;
+  else if (sv.confidence === "NONE") isSubV = false; // wrong chapter — definitively out
+  // LOW confidence stays NULL — sparse docket data, retry on next run
   await query(
     "UPDATE cases SET is_subchapter_v = $1 WHERE id = $2",
     [isSubV, caseDbId]
@@ -499,11 +521,6 @@ async function runCloseBackfill(opts) {
             close_lead_id, subchapterv_confidence
      FROM cases
      WHERE is_subchapter_v = true
-     AND case_name IS NOT NULL
-     AND LENGTH(TRIM(case_name)) > 3
-     AND case_name NOT ILIKE '%case number%'
-     AND case_name NOT ILIKE 'and the%'
-     AND case_name NOT ILIKE 'in re%'
      AND (
        close_lead_id IS NULL OR close_lead_id = ''
        OR id NOT IN (SELECT case_id FROM enrichment_attempts WHERE status='success' AND enrichment_json IS NOT NULL AND case_id IS NOT NULL)
@@ -669,4 +686,51 @@ async function runCloseBackfill(opts) {
   };
 }
 
-module.exports = { runDailyPipeline, runCloseBackfill };
+
+// ── RECLASSIFY: re-check unclassified cases (is_subchapter_v IS NULL) ───────
+// Re-hydrates in small batches (CourtListener quota: ~8 requests per case).
+// Run: /admin/reclassify?secret=...&limit=5
+async function runReclassify(opts) {
+  opts = opts || {};
+  const limit = Math.min(parseInt(opts.limit || "5", 10), 10);
+
+  const result = await query(
+    `SELECT id, courtlistener_docket_id, case_name FROM cases
+     WHERE is_subchapter_v IS NULL
+     AND courtlistener_docket_id IS NOT NULL
+     ORDER BY petition_date DESC
+     LIMIT $1`,
+    [limit]
+  );
+
+  const stats = { checked: 0, nowSubV: 0, notSubV: 0, stillUnknown: 0, errors: 0 };
+
+  for (const c of result.rows) {
+    await new Promise(r => setTimeout(r, 5000)); // CourtListener rate protection
+    try {
+      const hydrated = await hydrateDocket(c.courtlistener_docket_id);
+      if (hydrated.error) { stats.errors++; continue; }
+
+      const sv = hydrated.subchapterV || {};
+      let flag = null;
+      if (sv.isLikely === true) flag = true;
+      else if (sv.confidence === "NONE") flag = false;
+
+      await query("UPDATE cases SET is_subchapter_v = $1 WHERE id = $2", [flag, c.id]);
+      stats.checked++;
+      if (flag === true)  stats.nowSubV++;
+      else if (flag === false) stats.notSubV++;
+      else stats.stillUnknown++;
+
+      logger.info("Reclassify: " + (c.case_name || c.id) + " → " + (flag === null ? "still unknown" : flag ? "SUB-V ✓" : "not Sub-V"));
+    } catch(e) {
+      stats.errors++;
+      logger.warn("Reclassify error on case " + c.id + ": " + e.message);
+    }
+  }
+
+  const remaining = await query("SELECT COUNT(*) FROM cases WHERE is_subchapter_v IS NULL");
+  return Object.assign(stats, { remainingUnclassified: parseInt(remaining.rows[0].count) });
+}
+
+module.exports = { runDailyPipeline, runCloseBackfill, runReclassify };
