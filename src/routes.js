@@ -4,7 +4,7 @@ const router  = express.Router();
 const { discoverSubchapterVCases } = require("./courtListenerSearchService");
 const { hydrateDocket }            = require("./caseHydrationService");
 const { enrichCase }               = require("./enrichmentService");
-const { runDailyPipeline, runCloseBackfill } = require("./jobs/dailyPipeline");
+const { runDailyPipeline, runCloseBackfill, runReclassify } = require("./jobs/dailyPipeline");
 const store                        = require("./store");
 const logger                       = require("./logger");
 const { query }                    = require("./db/connection");
@@ -211,6 +211,22 @@ router.get("/admin/close-backfill/status", async (req, res) => {
       pushedToClose: parseInt(done.rows[0].count),
       totalSubV: parseInt(total.rows[0].count),
     });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ── Reclassify unclassified cases (is_subchapter_v IS NULL) ────────────────
+// Re-hydrates in small batches. Each case uses ~8 CourtListener requests.
+// Run: /admin/reclassify?secret=...&limit=5   (max 10 per run)
+router.get("/admin/reclassify", async (req, res) => {
+  if (req.query.secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error:"Unauthorized" });
+  }
+  try {
+    const result = await runReclassify({ limit: req.query.limit || "5" });
+    res.json(result);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
