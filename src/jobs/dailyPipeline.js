@@ -16,21 +16,14 @@ const MAX_CASES       = parseInt(process.env.DAILY_SEARCH_MAX_CASES     || "10",
 const MAX_ENRICHMENTS = parseInt(process.env.DAILY_ENRICH_MAX           || "999", 10);
 const PUSH_TO_CLOSE   = process.env.PUSH_TO_CLOSE !== "false";
 
-// ── Sub-V confidence threshold for Close push ──────────────────────────────
-// MEDIUM or HIGH = confirmed Sub-V → push to Close
-// LOW = uncertain (no is_subchapter_v flag, no trustee) → save to DB only, skip Close
-// This prevents large non-Sub-V Chapter 11 cases (GoHealth, etc.) from
-// polluting Close while still capturing every real Sub-V case.
+// ── Sub-V confidence gate for Close push ───────────────────────────────────
 const SUBV_CONFIDENCE_FOR_CLOSE = ["HIGH", "MEDIUM"];
 
 function isQualifiedForClose(hydratedCase) {
   const sv = hydratedCase.subchapterV;
   if (!sv) return false;
-  // Direct CourtListener flag — gold standard
   if (sv.isSubchapterVFlag === true) return true;
-  // Classifier confidence
   if (SUBV_CONFIDENCE_FOR_CLOSE.includes(sv.confidence)) return sv.isLikely === true;
-  // Has a known Sub-V trustee assigned — very reliable signal
   const trustee = hydratedCase.trustee;
   if (trustee && trustee.name && !/(u\.?s\.?\s*trustee|united states trustee)/i.test(trustee.name)) {
     return true;
@@ -74,7 +67,6 @@ async function getExistingDocketIds(docketIds) {
   }
 }
 
-// ── Save Close lead ID back to DB after successful push ────────────────────
 async function saveCloseLeadId(caseDbId, closeLeadId) {
   if (!caseDbId || !closeLeadId) return;
   try {
@@ -115,7 +107,6 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
 
   // DB-level dedupe: same company can appear under two docket IDs
   // (three search templates return different docket entries for one case).
-  // If a different docket already has this case_number, treat as existing.
   if (isNew && hydratedCase.docketNumber && hydratedCase.docketNumber.length > 4) {
     const dupByCaseNo = await query(
       "SELECT id FROM cases WHERE case_number = $1 LIMIT 1",
@@ -139,8 +130,7 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
   const sv = hydratedCase.subchapterV || {};
   let isSubV = null;
   if (sv.isLikely === true) isSubV = true;
-  else if (sv.confidence === "NONE") isSubV = false; // wrong chapter — definitively out
-  // LOW confidence stays NULL — sparse docket data, retry on next run
+  else if (sv.confidence === "NONE") isSubV = false;
   await query(
     "UPDATE cases SET is_subchapter_v = $1 WHERE id = $2",
     [isSubV, caseDbId]
@@ -252,7 +242,7 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
   try {
     const enriched = await enrichCase(hydratedCase);
 
-    // ── Persist enrichment to DB so it is never lost and backfill can reuse it ──
+    // Persist enrichment to DB so it is never lost and backfill can reuse it
     if (enriched) {
       await saveEnrichment(caseDbId, enriched, "daily_pipeline");
     }
@@ -321,7 +311,7 @@ async function processCase(discovered, runId, dryRun) {
 
     const { isNew, caseDbId, orgId } = await saveCaseToDb(hydrated, runId, dryRun);
     logger.info("Case " + docketId + " " + (isNew ? "CREATED" : "updated") + " — db id: " + caseDbId
-      + " — Sub-V: " + hydrated.subchapterV?.confidence);
+      + " — Sub-V: " + (hydrated.subchapterV?.confidence || "unknown"));
 
     return { docketId, caseDbId, isNew, caseName: hydrated.caseName, hydrated, orgId };
   } catch(e) {
@@ -330,7 +320,7 @@ async function processCase(discovered, runId, dryRun) {
   }
 }
 
-// ── MAIN PIPELINE ──────────────────────────────────────────────────────────
+// ── MAIN DAILY PIPELINE ────────────────────────────────────────────────────
 async function runDailyPipeline(opts) {
   opts = opts || {};
   const dryRun      = opts.dryRun      || false;
@@ -388,7 +378,6 @@ async function runDailyPipeline(opts) {
       } else if (result.isNew) {
         stats.new_cases_created++;
 
-        // Enrich every new case
         let enrichedData = null;
         if (!dryRun && enrichCount < MAX_ENRICHMENTS && result.caseDbId && result.hydrated) {
           stats.enrichments_attempted++;
@@ -398,9 +387,7 @@ async function runDailyPipeline(opts) {
           await new Promise(r => setTimeout(r, 1000));
         }
 
-        // ── GATE: only push confirmed Sub-V cases to Close ─────────────────
-        // This prevents large non-Sub-V Chapter 11 cases from polluting Close.
-        // Cases saved to DB regardless — the gate is only for Close.
+        // GATE: only push confirmed Sub-V cases to Close
         if (result.caseDbId && isQualifiedForClose(result.hydrated)) {
           newCasesForClose.push({
             caseDbId:     result.caseDbId,
@@ -416,11 +403,9 @@ async function runDailyPipeline(opts) {
         stats.existing_cases_updated++;
       }
 
-      // Pause between cases to protect CourtListener rate limit
       await new Promise(r => setTimeout(r, 5000));
     }
 
-    // Push confirmed Sub-V cases to Close
     if (PUSH_TO_CLOSE && !dryRun && newCasesForClose.length > 0) {
       logger.info("Pushing " + newCasesForClose.length + " Sub-V cases to Close");
 
@@ -429,6 +414,7 @@ async function runDailyPipeline(opts) {
 
         const contacts = await getContactsForCase(item.caseDbId, query);
         const h = item.hydrated;
+        const leadScore = scoreLeadFromEnrichment(item.enrichedData, contacts);
 
         const caseRow = {
           case_name:                  cleanName(h.caseName   || ""),
@@ -441,18 +427,28 @@ async function runDailyPipeline(opts) {
           subchapterv_confidence:     h.subchapterV?.confidence || null,
           courtlistener_absolute_url: h.absoluteUrl    || null,
           assigned_judge:             h.assignedTo     || null,
-          website:                    item.enrichedData?.website || item.enrichedData?.aiData?.website || null,
+          website:                    item.enrichedData?.company?.website || item.enrichedData?.aiData?.website || null,
           address:                    h.debtor?.address || null,
+          lead_score:                 leadScore,
         };
 
-        const enrichmentForClose = item.enrichedData?.aiData || item.enrichedData || null;
+        const enrichmentForClose = item.enrichedData?.aiData
+          ? Object.assign({}, item.enrichedData.aiData, {
+              company:       item.enrichedData.company,
+              socialLinks:   item.enrichedData.company?.socialLinks,
+              scrapedPhones: item.enrichedData.company?.scrapedPhones,
+              emails:        item.enrichedData.company?.emails,
+              leadScore:     leadScore,
+            })
+          : (item.enrichedData || null);
+
         const closeResult = await pushCaseToClose(caseRow, contacts, enrichmentForClose);
 
         if (closeResult.success) {
           stats.close_pushed++;
-          // ── KEY FIX: save Close lead ID to DB to prevent future duplicates ──
           await saveCloseLeadId(item.caseDbId, closeResult.leadId);
         } else if (closeResult.skipped) {
+          if (closeResult.leadId) await saveCloseLeadId(item.caseDbId, closeResult.leadId);
           stats.close_skipped++;
         } else {
           stats.close_errors++;
@@ -462,7 +458,8 @@ async function runDailyPipeline(opts) {
           + (closeResult.success ? "✓ " + closeResult.leadId
            : closeResult.skipped ? "skip(" + closeResult.reason + ")"
            : "✗ " + closeResult.message)
-          + " — " + (caseRow.case_name || caseRow.case_number));
+          + " — " + (caseRow.case_name || caseRow.case_number)
+          + " [" + leadScore.tier + "]");
       }
 
       logger.info("Close complete — pushed:" + stats.close_pushed
@@ -504,14 +501,12 @@ async function runDailyPipeline(opts) {
   }
 }
 
-// ── BACKFILL: push DB cases not yet in Close ───────────────────────────────
-// Called from /admin/close-backfill endpoint
-// Uses close_lead_id to guarantee no duplicates
+// ── BACKFILL: enrich + push/update DB cases in Close ───────────────────────
 async function runCloseBackfill(opts) {
   opts = opts || {};
   const limit       = parseInt(opts.limit  || "20", 10);
   const offset      = parseInt(opts.offset || "0",  10);
-  const enrichFresh = opts.enrich !== "false"; // default: enrich if no stored data
+  const enrichFresh = opts.enrich !== "false";
 
   logger.info("Close backfill starting — limit:" + limit + " offset:" + offset + " enrich:" + enrichFresh);
 
@@ -525,6 +520,13 @@ async function runCloseBackfill(opts) {
        close_lead_id IS NULL OR close_lead_id = ''
        OR id NOT IN (SELECT case_id FROM enrichment_attempts WHERE status='success' AND enrichment_json IS NOT NULL AND case_id IS NOT NULL)
      )
+     AND case_name IS NOT NULL
+     AND LENGTH(TRIM(case_name)) > 3
+     AND case_name NOT ILIKE '%case number%'
+     AND case_name NOT ILIKE 'and the%'
+     AND case_name NOT ILIKE 'in re%'
+     AND case_name NOT ILIKE '%official form%'
+     AND case_name NOT ILIKE '%pursuant to%'
      ORDER BY petition_date DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset]
@@ -541,7 +543,7 @@ async function runCloseBackfill(opts) {
     try {
       const contacts = await getContactsForCase(c.id, query);
 
-      // ── STEP 1: Get enrichment — stored first, fresh if missing ──────────
+      // STEP 1: stored enrichment first, fresh if missing
       let enrichedData = await loadEnrichment(c.id);
 
       if (!enrichedData && enrichFresh) {
@@ -571,7 +573,6 @@ async function runCloseBackfill(opts) {
             await saveEnrichment(c.id, enrichedData, "backfill");
             stats.enriched++;
 
-            // Save discovered owner into DB contacts too
             const owner = (enrichedData.principals || []).find(p => p.isPrimary && p.name)
                        || (enrichedData.principals || [])[0];
             if (owner && owner.name && owner.name.length >= 3) {
@@ -602,7 +603,7 @@ async function runCloseBackfill(opts) {
         }
       }
 
-      // ── STEP 2: Score the lead ────────────────────────────────────────────
+      // STEP 2: score the lead
       const freshContacts = await getContactsForCase(c.id, query);
       const leadScore = scoreLeadFromEnrichment(enrichedData, freshContacts);
 
@@ -632,9 +633,8 @@ async function runCloseBackfill(opts) {
           })
         : enrichedData;
 
-      // ── STEP 3: Push new or update existing ──────────────────────────────
+      // STEP 3: push new or update existing
       if (c.close_lead_id) {
-        // Lead already in Close — UPDATE it in place with enrichment
         const updateResult = await updateLeadInClose(c.close_lead_id, caseRow, freshContacts, enrichmentForClose);
         if (updateResult.success) {
           stats.updated++;
@@ -649,7 +649,6 @@ async function runCloseBackfill(opts) {
           stats.pushed++;
           logger.info("Backfill ✓ " + caseRow.case_name + " → " + closeResult.leadId + " [" + leadScore.tier + "]");
         } else if (closeResult.skipped && closeResult.leadId) {
-          // Exists in Close — save ID and update in place
           await saveCloseLeadId(c.id, closeResult.leadId);
           const updateResult = await updateLeadInClose(closeResult.leadId, caseRow, freshContacts, enrichmentForClose);
           if (updateResult.success) stats.updated++;
@@ -686,10 +685,7 @@ async function runCloseBackfill(opts) {
   };
 }
 
-
-// ── RECLASSIFY: re-check unclassified cases (is_subchapter_v IS NULL) ───────
-// Re-hydrates in small batches (CourtListener quota: ~8 requests per case).
-// Run: /admin/reclassify?secret=...&limit=5
+// ── RECLASSIFY: re-check unclassified cases (is_subchapter_v IS NULL) ──────
 async function runReclassify(opts) {
   opts = opts || {};
   const limit = Math.min(parseInt(opts.limit || "5", 10), 10);
@@ -706,7 +702,7 @@ async function runReclassify(opts) {
   const stats = { checked: 0, nowSubV: 0, notSubV: 0, stillUnknown: 0, errors: 0 };
 
   for (const c of result.rows) {
-    await new Promise(r => setTimeout(r, 5000)); // CourtListener rate protection
+    await new Promise(r => setTimeout(r, 5000));
     try {
       const hydrated = await hydrateDocket(c.courtlistener_docket_id);
       if (hydrated.error) { stats.errors++; continue; }
