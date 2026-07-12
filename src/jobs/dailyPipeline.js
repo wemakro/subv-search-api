@@ -499,6 +499,11 @@ async function runCloseBackfill(opts) {
             close_lead_id, subchapterv_confidence
      FROM cases
      WHERE is_subchapter_v = true
+     AND case_name IS NOT NULL
+     AND LENGTH(TRIM(case_name)) > 3
+     AND case_name NOT ILIKE '%case number%'
+     AND case_name NOT ILIKE 'and the%'
+     AND case_name NOT ILIKE 'in re%'
      AND (
        close_lead_id IS NULL OR close_lead_id = ''
        OR id NOT IN (SELECT case_id FROM enrichment_attempts WHERE status='success' AND enrichment_json IS NOT NULL AND case_id IS NOT NULL)
