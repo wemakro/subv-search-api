@@ -307,6 +307,18 @@ function buildNoteHtml(c, contacts, enrichmentData) {
   if (c.courtlistener_absolute_url) html += "<p><strong>CourtListener:</strong> <a href=\"" + c.courtlistener_absolute_url + "\">" + c.courtlistener_absolute_url + "</a></p>";
   if (c.subchapterv_confidence) html += "<p><strong>Sub-V Confidence:</strong> " + c.subchapterv_confidence + "</p>";
 
+  // Lead score badge
+  const ls = (e && e.leadScore) || (c && c.lead_score) || null;
+  if (ls && ls.tier) {
+    const tierColor = ls.tier === "HOT" ? "#c0392b" : ls.tier === "WARM" ? "#d35400" : "#7f8c8d";
+    html += "<p><strong>Lead Score:</strong> <span style=\"color:" + tierColor + ";font-weight:bold\">" + ls.tier + " (" + ls.score + ")</span></p>";
+    if (ls.reasons && ls.reasons.length) {
+      html += "<ul>";
+      ls.reasons.slice(0, 6).forEach(function(r) { html += "<li style=\"font-size:12px\">" + r + "</li>"; });
+      html += "</ul>";
+    }
+  }
+
   // Owner / Principal
   if (sortContacts(principals).length) {
     html += "<hr/><h3>Principal / Owner</h3>";
@@ -632,4 +644,64 @@ async function pushCasesToClose(cases) {
   return results;
 }
 
-module.exports = { pushCaseToClose, pushCasesToClose, getContactsForCase, buildNoteHtml, buildAllEmails, buildAllPhones };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UPDATE EXISTING LEAD IN PLACE
+// Adds owner contact if missing, updates website, adds fresh enrichment note.
+// Never deletes or duplicates existing data.
+// ═══════════════════════════════════════════════════════════════════════════
+async function getCloseContactNames(leadId) {
+  try {
+    const result = await closeRequest("GET", "/contact/?lead_id=" + leadId + "&_fields=id,name,title");
+    if (result._error) return [];
+    return (result.data || []).map(c => (c.name || "").toLowerCase().trim());
+  } catch(e) { return []; }
+}
+
+async function updateLeadInClose(leadId, caseRow, contacts, enrichmentData) {
+  if (!CLOSE_API_KEY || !leadId) return { success: false, reason: "no_key_or_id" };
+
+  const e = enrichmentData || {};
+
+  try {
+    // 1. Update website URL on the lead if we have one now
+    if (e.website || caseRow.website) {
+      await closeRequest("PUT", "/lead/" + leadId + "/", {
+        url: e.website || caseRow.website
+      });
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    // 2. Add owner contact if not already on the lead
+    const existingNames = await getCloseContactNames(leadId);
+
+    const attorneys  = (contacts||[]).filter(x => x.contact_type === "debtor_attorney" && !isUSTrustee(x));
+    const principals = (contacts||[]).filter(x =>
+      x.contact_type === "principal" && !isUSTrustee(x)
+      && !isPrincipalActuallyAttorney(x, attorneys) && isValidTitle(x.title)
+    );
+
+    let contactsAdded = 0;
+    for (const p of sortContacts(principals).slice(0, 2)) {
+      const pName = cleanName(p.full_name || "").toLowerCase().trim();
+      if (!pName || pName.length < 2) continue;
+      if (existingNames.includes(pName)) continue; // already there
+
+      await new Promise(r => setTimeout(r, 250));
+      const created = await createContact(leadId, p, e);
+      if (created) contactsAdded++;
+    }
+
+    // 3. Add updated enrichment note
+    const noteHtml = buildNoteHtml(caseRow, contacts || [], e);
+    await createNote(leadId, noteHtml);
+
+    logger.info("Close lead updated in place: " + leadId + " — " + contactsAdded + " contacts added");
+    return { success: true, leadId, contactsAdded };
+  } catch(err) {
+    logger.warn("updateLeadInClose failed for " + leadId + ": " + err.message);
+    return { success: false, message: err.message };
+  }
+}
+
+module.exports = { pushCaseToClose, pushCasesToClose, getContactsForCase, buildNoteHtml, buildAllEmails, buildAllPhones, updateLeadInClose };
