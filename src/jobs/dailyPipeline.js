@@ -6,7 +6,8 @@ const { enrichCase }                       = require("../enrichmentService");
 const { upsertCase, flagForReview }        = require("../data/caseRepository");
 const { upsertOrganization }               = require("../data/organizationRepository");
 const { upsertContact, linkContactToCase } = require("../data/contactRepository");
-const { pushCaseToClose, getContactsForCase } = require("../integrations/closeIntegration");
+const { pushCaseToClose, getContactsForCase, updateLeadInClose } = require("../integrations/closeIntegration");
+const { saveEnrichment, loadEnrichment, scoreLeadFromEnrichment } = require("../data/enrichmentStore");
 const { query }                            = require("../db/connection");
 const logger                               = require("../logger");
 
@@ -228,6 +229,12 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
   logger.info("Auto-enriching: " + caseName);
   try {
     const enriched = await enrichCase(hydratedCase);
+
+    // ── Persist enrichment to DB so it is never lost and backfill can reuse it ──
+    if (enriched) {
+      await saveEnrichment(caseDbId, enriched, "daily_pipeline");
+    }
+
     if (!enriched || !enriched.principals || enriched.principals.length === 0) {
       logger.info("Auto-enrich: no owner found for " + caseName);
       return enriched;
@@ -480,36 +487,102 @@ async function runDailyPipeline(opts) {
 // Uses close_lead_id to guarantee no duplicates
 async function runCloseBackfill(opts) {
   opts = opts || {};
-  const limit  = parseInt(opts.limit  || "20", 10);
-  const offset = parseInt(opts.offset || "0",  10);
+  const limit       = parseInt(opts.limit  || "20", 10);
+  const offset      = parseInt(opts.offset || "0",  10);
+  const enrichFresh = opts.enrich !== "false"; // default: enrich if no stored data
 
-  logger.info("Close backfill starting — limit:" + limit + " offset:" + offset);
+  logger.info("Close backfill starting — limit:" + limit + " offset:" + offset + " enrich:" + enrichFresh);
 
-  // Only pull cases that:
-  // 1. Are confirmed Sub-V (is_subchapter_v = true)
-  // 2. Don't already have a Close lead ID
   const casesResult = await query(
     `SELECT id, courtlistener_docket_id, case_name, debtor_name, case_number,
             court_id, petition_date, is_subchapter_v, courtlistener_absolute_url,
             close_lead_id, subchapterv_confidence
      FROM cases
-     WHERE (close_lead_id IS NULL OR close_lead_id = '')
-     AND is_subchapter_v = true
+     WHERE is_subchapter_v = true
+     AND (
+       close_lead_id IS NULL OR close_lead_id = ''
+       OR id NOT IN (SELECT case_id FROM enrichment_attempts WHERE status='success' AND enrichment_json IS NOT NULL AND case_id IS NOT NULL)
+     )
      ORDER BY petition_date DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset]
   );
 
   const cases = casesResult.rows;
-  logger.info("Backfill: " + cases.length + " cases to push (offset " + offset + ")");
+  logger.info("Backfill: " + cases.length + " cases to process (offset " + offset + ")");
 
-  const stats = { pushed: 0, skipped: 0, errors: 0, details: [] };
+  const stats = { pushed: 0, updated: 0, skipped: 0, errors: 0, enriched: 0, details: [] };
 
   for (const c of cases) {
     await new Promise(r => setTimeout(r, 600));
 
     try {
       const contacts = await getContactsForCase(c.id, query);
+
+      // ── STEP 1: Get enrichment — stored first, fresh if missing ──────────
+      let enrichedData = await loadEnrichment(c.id);
+
+      if (!enrichedData && enrichFresh) {
+        logger.info("Backfill: enriching " + (c.case_name || c.case_number));
+        const pseudoHydrated = {
+          docketId:     c.courtlistener_docket_id,
+          caseName:     c.case_name,
+          debtorName:   c.debtor_name || c.case_name,
+          docketNumber: c.case_number,
+          courtId:      c.court_id,
+          dateFiled:    c.petition_date,
+          attorneys:    contacts.filter(x => x.contact_type === "debtor_attorney").map(x => ({
+            name: x.full_name, firm: x.organization_name, email: x.primary_email, phone: x.primary_phone
+          })),
+          principals:   contacts.filter(x => x.contact_type === "principal").map(x => ({
+            name: x.full_name, title: x.title, email: x.primary_email, phone: x.primary_phone
+          })),
+          trustee:      (function() {
+            const t = contacts.find(x => x.contact_type === "subchapter_v_trustee");
+            return t ? { name: t.full_name, email: t.primary_email, phone: t.primary_phone } : null;
+          })(),
+        };
+
+        try {
+          enrichedData = await enrichCase(pseudoHydrated);
+          if (enrichedData) {
+            await saveEnrichment(c.id, enrichedData, "backfill");
+            stats.enriched++;
+
+            // Save discovered owner into DB contacts too
+            const owner = (enrichedData.principals || []).find(p => p.isPrimary && p.name)
+                       || (enrichedData.principals || [])[0];
+            if (owner && owner.name && owner.name.length >= 3) {
+              const ai = enrichedData.aiData || {};
+              const bestEmail = ((ai.ownerEmails||[]).find(e => e.confidence==="confirmed") || (ai.ownerEmails||[])[0] || {}).email || owner.email || null;
+              const bestPhone = ((ai.ownerPhones||[]).find(p => p.type==="mobile"||p.type==="direct") || (ai.ownerPhones||[])[0] || {}).phone || owner.phone || null;
+              const contact = await upsertContact({
+                full_name: cleanName(owner.name),
+                title: cleanName(owner.title || owner.role) || "Owner",
+                contact_type: "principal",
+                primary_email: bestEmail,
+                primary_email_status: bestEmail ? "unverified" : null,
+                primary_phone: bestPhone,
+                overall_confidence_score: owner.confidence === "HIGH" ? 0.9 : 0.6,
+                verification_status: "unverified",
+              });
+              if (contact?.id) {
+                await linkContactToCase(c.id, contact.id, "principal", {
+                  isPrimary: true, sourceType: "ai_enrichment_backfill",
+                  confidence: owner.confidence === "HIGH" ? 0.9 : 0.6,
+                });
+              }
+            }
+          }
+          await new Promise(r => setTimeout(r, 1500));
+        } catch(enrichErr) {
+          logger.warn("Backfill enrichment failed for " + c.case_name + ": " + enrichErr.message);
+        }
+      }
+
+      // ── STEP 2: Score the lead ────────────────────────────────────────────
+      const freshContacts = await getContactsForCase(c.id, query);
+      const leadScore = scoreLeadFromEnrichment(enrichedData, freshContacts);
 
       const caseRow = {
         case_name:                  cleanName(c.case_name   || c.debtor_name || ""),
@@ -522,45 +595,72 @@ async function runCloseBackfill(opts) {
         subchapterv_confidence:     c.subchapterv_confidence || "MEDIUM",
         courtlistener_absolute_url: c.courtlistener_absolute_url || null,
         assigned_judge:             null,
-        website:                    null,
-        address:                    null,
+        website:                    enrichedData?.company?.website || enrichedData?.aiData?.website || null,
+        address:                    enrichedData?.company?.address || null,
+        lead_score:                 leadScore,
       };
 
-      const closeResult = await pushCaseToClose(caseRow, contacts, null);
+      const enrichmentForClose = enrichedData?.aiData
+        ? Object.assign({}, enrichedData.aiData, {
+            company:       enrichedData.company,
+            socialLinks:   enrichedData.company?.socialLinks,
+            scrapedPhones: enrichedData.company?.scrapedPhones,
+            emails:        enrichedData.company?.emails,
+            leadScore:     leadScore,
+          })
+        : enrichedData;
 
-      if (closeResult.success) {
-        await saveCloseLeadId(c.id, closeResult.leadId);
-        stats.pushed++;
-        logger.info("Backfill ✓ " + caseRow.case_name + " → " + closeResult.leadId);
-      } else if (closeResult.skipped) {
-        // Duplicate found in Close — save the existing lead ID
-        if (closeResult.leadId) await saveCloseLeadId(c.id, closeResult.leadId);
-        stats.skipped++;
-        logger.info("Backfill skip: " + caseRow.case_name + " — " + closeResult.reason);
+      // ── STEP 3: Push new or update existing ──────────────────────────────
+      if (c.close_lead_id) {
+        // Lead already in Close — UPDATE it in place with enrichment
+        const updateResult = await updateLeadInClose(c.close_lead_id, caseRow, freshContacts, enrichmentForClose);
+        if (updateResult.success) {
+          stats.updated++;
+          logger.info("Backfill ↻ updated " + caseRow.case_name + " (" + c.close_lead_id + ") [" + leadScore.tier + "]");
+        } else {
+          stats.errors++;
+        }
       } else {
-        stats.errors++;
-        logger.warn("Backfill ✗ " + caseRow.case_name + ": " + closeResult.message);
+        const closeResult = await pushCaseToClose(caseRow, freshContacts, enrichmentForClose);
+        if (closeResult.success) {
+          await saveCloseLeadId(c.id, closeResult.leadId);
+          stats.pushed++;
+          logger.info("Backfill ✓ " + caseRow.case_name + " → " + closeResult.leadId + " [" + leadScore.tier + "]");
+        } else if (closeResult.skipped && closeResult.leadId) {
+          // Exists in Close — save ID and update in place
+          await saveCloseLeadId(c.id, closeResult.leadId);
+          const updateResult = await updateLeadInClose(closeResult.leadId, caseRow, freshContacts, enrichmentForClose);
+          if (updateResult.success) stats.updated++;
+          else stats.skipped++;
+        } else if (closeResult.skipped) {
+          stats.skipped++;
+        } else {
+          stats.errors++;
+          logger.warn("Backfill ✗ " + caseRow.case_name + ": " + closeResult.message);
+        }
       }
 
-      stats.details.push({ caseId: c.id, caseName: caseRow.case_name, result: closeResult });
+      stats.details.push({ caseId: c.id, caseName: caseRow.case_name, tier: leadScore.tier, score: leadScore.score });
     } catch(e) {
       stats.errors++;
       logger.warn("Backfill error on case " + c.id + ": " + e.message);
     }
   }
 
-  logger.info("Backfill complete — pushed:" + stats.pushed
-    + " skipped:" + stats.skipped + " errors:" + stats.errors);
+  logger.info("Backfill complete — pushed:" + stats.pushed + " updated:" + stats.updated
+    + " enriched:" + stats.enriched + " skipped:" + stats.skipped + " errors:" + stats.errors);
 
   return {
-    pushed:  stats.pushed,
-    skipped: stats.skipped,
-    errors:  stats.errors,
-    total:   cases.length,
-    offset,
-    limit,
+    pushed:   stats.pushed,
+    updated:  stats.updated,
+    enriched: stats.enriched,
+    skipped:  stats.skipped,
+    errors:   stats.errors,
+    total:    cases.length,
+    offset, limit,
     nextOffset: offset + limit,
-    hasMore: cases.length === limit,
+    hasMore:  cases.length === limit,
+    leads:    stats.details,
   };
 }
 
