@@ -51,7 +51,23 @@ function closeRequest(method, path, body) {
 // ── STATUS IDs ─────────────────────────────────────────────────────────────
 const LEAD_STATUS = {
   newNeedsReview: "stat_KnhQmcVJLP0nSs8wdYqGxcW7hpe0Ey4h5ecIzfarMcK",
+  // Optional: create these two statuses in Close, then set the env vars in Render.
+  // Falls back to New - Needs Review when unset.
+  sendReady:      process.env.CLOSE_SEND_READY_STATUS_ID      || null,
+  needsResearch:  process.env.CLOSE_NEEDS_RESEARCH_STATUS_ID  || null,
 };
+
+// ── List routing: Send Ready vs Needs Research ──────────────────────────────
+// Send Ready  = confirmed Sub-V + owner identified + at least one confirmed email
+// Needs Research = confirmed Sub-V but missing owner or confirmed contact channel
+function chooseLeadStatus(enrichmentData) {
+  const e = enrichmentData || {};
+  const hasOwner = !!e.ownerName;
+  const hasConfirmedEmail = (e.ownerEmails || []).some(function(x) { return x.confidence === "confirmed"; });
+  if (hasOwner && hasConfirmedEmail && LEAD_STATUS.sendReady) return LEAD_STATUS.sendReady;
+  if (LEAD_STATUS.needsResearch) return LEAD_STATUS.needsResearch;
+  return LEAD_STATUS.newNeedsReview;
+}
 
 const OPPORTUNITY_STATUS = {
   discoveryCallScheduled: "stat_H0XAr39brZTeiJoTKfQ1AHV7F0YX1NsljApuLdEq1V4",
@@ -448,7 +464,7 @@ async function createLead(c, enrichmentData) {
   const result = await closeRequest("POST", "/lead/", {
     name:        name,
     description: buildLeadDescription(c),
-    status_id:   LEAD_STATUS.newNeedsReview,
+    status_id:   chooseLeadStatus(e),
     url:         e.website || c.website || null,
     custom:      {},
   });
@@ -664,11 +680,14 @@ async function updateLeadInClose(leadId, caseRow, contacts, enrichmentData) {
   const e = enrichmentData || {};
 
   try {
-    // 1. Update website URL on the lead if we have one now
-    if (e.website || caseRow.website) {
-      await closeRequest("PUT", "/lead/" + leadId + "/", {
-        url: e.website || caseRow.website
-      });
+    // 1. Update website URL and status on the lead
+    const leadUpdate = {};
+    if (e.website || caseRow.website) leadUpdate.url = e.website || caseRow.website;
+    // Promote to Send Ready when a confirmed owner email now exists
+    const newStatus = chooseLeadStatus(e);
+    if (newStatus !== LEAD_STATUS.newNeedsReview) leadUpdate.status_id = newStatus;
+    if (Object.keys(leadUpdate).length) {
+      await closeRequest("PUT", "/lead/" + leadId + "/", leadUpdate);
       await new Promise(r => setTimeout(r, 250));
     }
 
