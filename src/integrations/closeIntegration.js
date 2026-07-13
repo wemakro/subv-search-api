@@ -323,14 +323,14 @@ function buildNoteHtml(c, contacts, enrichmentData) {
   if (c.courtlistener_absolute_url) html += "<p><strong>CourtListener:</strong> <a href=\"" + c.courtlistener_absolute_url + "\">" + c.courtlistener_absolute_url + "</a></p>";
   if (c.subchapterv_confidence) html += "<p><strong>Sub-V Confidence:</strong> " + c.subchapterv_confidence + "</p>";
 
-  // Lead score badge
+  // Lead score badge — no inline styles, Close API rejects style attributes
   const ls = (e && e.leadScore) || (c && c.lead_score) || null;
   if (ls && ls.tier) {
-    const tierColor = ls.tier === "HOT" ? "#c0392b" : ls.tier === "WARM" ? "#d35400" : "#7f8c8d";
-    html += "<p><strong>Lead Score:</strong> <span style=\"color:" + tierColor + ";font-weight:bold\">" + ls.tier + " (" + ls.score + ")</span></p>";
+    const tierEmoji = ls.tier === "HOT" ? "🔥" : ls.tier === "WARM" ? "⚡" : "❄️";
+    html += "<p><strong>Lead Score: " + tierEmoji + " " + ls.tier + " (" + ls.score + ")</strong></p>";
     if (ls.reasons && ls.reasons.length) {
       html += "<ul>";
-      ls.reasons.slice(0, 6).forEach(function(r) { html += "<li style=\"font-size:12px\">" + r + "</li>"; });
+      ls.reasons.slice(0, 6).forEach(function(r) { html += "<li>" + r + "</li>"; });
       html += "</ul>";
     }
   }
