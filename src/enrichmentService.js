@@ -260,7 +260,12 @@ function buildClaudeReviewPrompt(caseData, debtorName, geminiResult) {
     + "}\n\n"
     + "ownerEmails format: [{\"email\":\"info@domain.com\",\"confidence\":\"guessed\",\"type\":\"office\"}]\n"
     + "ownerPhones format: [{\"phone\":\"+17275551234\",\"label\":\"Main business line\",\"type\":\"office\"}]\n"
-    + "confidence values: 'confirmed' (found explicitly) | 'guessed' (derived)";
+    + "confidence values: 'confirmed' (found explicitly) | 'guessed' (derived)\n\n"
+    + "CRITICAL OUTPUT RULE: Your entire response must be the JSON object and nothing else.\n"
+    + "No commentary, no markdown, no 'Key findings', no notes before or after.\n"
+    + "Start your response with { and end with }.\n"
+    + "Put any important discoveries (e.g. conflicting owner names in public records)\n"
+    + "inside ownerValidationNote or redFlags — NOT as prose outside the JSON.";
 }
 
 // ── MERGE Gemini + Claude results ──────────────────────────────────────────
@@ -361,15 +366,16 @@ async function callGemini(prompt) {
 }
 
 // ── CLAUDE (Layer 2 review) ────────────────────────────────────────────────
-async function callClaude(prompt) {
+async function callClaude(prompt, retryCount) {
   if (!ANTHROPIC_KEY) return null;
+  retryCount = retryCount || 0;
   try {
     var res = await postJson(
       "api.anthropic.com",
       "/v1/messages",
       {
         model:      "claude-sonnet-4-6",
-        max_tokens: 1000,
+        max_tokens: 2000,
         messages:   [{ role: "user", content: prompt }],
         tools:      [{ type: "web_search_20250305", name: "web_search" }]
       },
@@ -378,6 +384,14 @@ async function callClaude(prompt) {
         "anthropic-version": "2023-06-01"
       }
     );
+
+    // Rate limited — wait 65s for the per-minute token window to reset, retry once
+    if (res.status === 429 && retryCount < 1) {
+      logger.warn("Claude 429 — waiting 65s before retry");
+      await new Promise(function(r) { setTimeout(r, 65000); });
+      return callClaude(prompt, retryCount + 1);
+    }
+
     if (res.status < 200 || res.status >= 300) {
       logger.warn("Claude HTTP " + res.status + ": " + res.body.slice(0,300));
       return null;
