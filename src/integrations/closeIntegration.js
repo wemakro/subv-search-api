@@ -1,6 +1,7 @@
 "use strict";
 const https  = require("https");
 const logger = require("../logger");
+const { namesMatch } = require("../nameMatch");
 
 const CLOSE_API_KEY = process.env.CLOSE_API_KEY || "";
 const CLOSE_BASE    = "api.close.com";
@@ -174,14 +175,26 @@ function isValidTitle(title) {
   return true;
 }
 
+const ATTORNEY_TITLE_PATTERN = /\b(attorney|counsel|esquire|esq|lawyer)\b/i;
+// In-house legal officers of the debtor are legitimate leads, not case counsel
+const IN_HOUSE_TITLE_PATTERN = /\b(general\s+counsel|chief\s+legal)\b/i;
+// Law-specific phrases only — bare llp/pllc would drop real owners of any
+// non-law debtor organized as an LLP/PLLC (accounting, medical, etc.)
+const LAW_FIRM_ORG_PATTERN   = /\blaw\s+(?:firm|office|offices|group)\b|\battorneys\s+at\s+law\b/i;
+
 function isPrincipalActuallyAttorney(principal, attorneys) {
-  const pName = (principal.full_name || "").toLowerCase().trim();
-  if (!pName) return false;
-  for (const a of attorneys) {
-    const aName = (a.full_name || "").toLowerCase().trim();
-    if (aName && aName.length > 3 && (aName === pName || aName.includes(pName) || pName.includes(aName))) return true;
-  }
-  return false;
+  // Attorney-shaped title/name/org — catches attorneys even when the case's
+  // attorney list is empty (CourtListener /attorneys can return nothing)
+  const title = principal.title || "";
+  if (ATTORNEY_TITLE_PATTERN.test(title) && !IN_HOUSE_TITLE_PATTERN.test(title)) return true;
+  if (/,\s*esq\.?\s*$/i.test(principal.full_name || "")) return true;
+  if (LAW_FIRM_ORG_PATTERN.test(principal.organization_name || "")) return true;
+
+  // Normalized first+last comparison — raw substring matching missed
+  // "John A. Smith" (CourtListener) vs "John Smith" (petition /s/ block)
+  const pName = principal.full_name || "";
+  if (!pName.trim()) return false;
+  return (attorneys || []).some(a => namesMatch(pName, a.full_name));
 }
 
 // ── PHONE AND EMAIL BUILDERS ───────────────────────────────────────────────

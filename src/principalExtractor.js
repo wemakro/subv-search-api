@@ -2,6 +2,8 @@
 // Priority: petition signer > party data > docket entries
 // Never invents names, emails, or phone numbers
 
+const { matchesAnyName } = require("./nameMatch");
+
 const HIGH_CONFIDENCE_ROLES = [
   "managing member","sole member","president","ceo","chief executive",
   "owner","authorized representative","authorized signatory",
@@ -115,11 +117,17 @@ function fromPartyData(parties) {
   return results;
 }
 
-function extractPrincipals({ parties, petitionFields }) {
+function extractPrincipals({ parties, petitionFields, attorneys }) {
+  // Case attorneys must never surface as principals, whatever the source
+  const attorneyNames = (attorneys || [])
+    .map(a => (typeof a === "string" ? a : a && a.name))
+    .filter(Boolean);
+  if (petitionFields && petitionFields.attorneyName) attorneyNames.push(petitionFields.attorneyName);
+
   const all = [
     ...fromPetitionFields(petitionFields),
     ...fromPartyData(parties),
-  ];
+  ].filter(p => p.name && !matchesAnyName(p.name, attorneyNames));
 
   // Deduplicate by name
   const seen = new Set();

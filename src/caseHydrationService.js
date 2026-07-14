@@ -162,9 +162,18 @@ async function hydrateDocket(docketId) {
       warnings:         [...doc.reasons, ...(textResult.warnings||[])]
     });
 
-    // Extract from best available text
+    // Extract from best available text. Merge instead of replace: keep
+    // fields from earlier (higher-relevance) docs and let later docs fill
+    // gaps — a wholesale replace loses debtor fields whenever an earlier
+    // doc yielded no usable signer.
     if (textResult.available && textResult.text && !petitionFields.signerName) {
-      petitionFields = extractPetitionFields(textResult.text);
+      const extracted = extractPetitionFields(textResult.text);
+      petitionFields = Object.assign({}, extracted, petitionFields, {
+        evidenceSnippets: [
+          ...(petitionFields.evidenceSnippets || []),
+          ...(extracted.evidenceSnippets || []),
+        ],
+      });
     }
   }
 
@@ -176,7 +185,7 @@ async function hydrateDocket(docketId) {
   // 7. Principals
   const normParties    = normalizeParties(parties);
   const normAttorneys  = normalizeAttorneys(attorneys, parties);
-  const principals     = extractPrincipals({ parties: normParties, petitionFields });
+  const principals     = extractPrincipals({ parties: normParties, petitionFields, attorneys: normAttorneys });
 
   if (!principals.length) {
     debug.warnings.push("Principal not found in petition text.");
