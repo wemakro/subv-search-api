@@ -2,6 +2,7 @@
 const https  = require("https");
 const http   = require("http");
 const logger = require("./logger");
+const { namesMatch } = require("./nameMatch");
 
 const GOOGLE_KEY     = process.env.GOOGLE_API_KEY   || "";
 const GEMINI_KEY     = process.env.GEMINI_API_KEY   || "";
@@ -271,11 +272,15 @@ function mergeEnrichmentResults(gemini, claude) {
 
   var g = gemini, c = claude;
 
-  // Owner: Claude validates and overrides Gemini.
-  // If Claude explicitly set ownerValidated:false and cleared the name, trust that.
-  var ownerName = c.ownerName || g.ownerName || null;
-  if (c.ownerValidated === false && c.ownerName === null && g.ownerName) {
-    ownerName = null; // Claude rejected Gemini's finding
+  // Owner: Claude validates and overrides Gemini. Gemini's owner only
+  // survives review when Claude confirmed it or supplied its own name — an
+  // unvalidated Gemini owner is frequently the case attorney picked up from
+  // news coverage. (Claude may return undefined/"" instead of null, so a
+  // strict === null check let rejected names through.)
+  var cOwnerName = (typeof c.ownerName === "string" && c.ownerName.trim()) ? c.ownerName.trim() : null;
+  var ownerName = cOwnerName || g.ownerName || null;
+  if (!cOwnerName && c.ownerValidated !== true && g.ownerName) {
+    ownerName = null; // Claude neither confirmed nor replaced Gemini's owner
   }
 
   return {
@@ -593,10 +598,7 @@ function isAttorneyOrTrustee(name, title, org, knownAttorneyNames) {
   if (NAME_SUFFIX_PATTERN.test(name))  return true;
   if (ATTORNEY_TITLE_PATTERN.test(s))  return true;
   if (LAW_FIRM_PATTERN.test(org||""))  return true;
-  var nameClean = (name||"").toLowerCase().replace(NAME_SUFFIX_PATTERN,"").trim();
-  return (knownAttorneyNames||[]).some(function(k) {
-    return k.length>3 && (k.includes(nameClean)||nameClean.includes(k));
-  });
+  return (knownAttorneyNames||[]).some(function(k) { return namesMatch(name, k); });
 }
 
 // ── TRUSTEE LOOKUP — database-backed ───────────────────────────────────────

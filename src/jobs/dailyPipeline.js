@@ -8,6 +8,7 @@ const { upsertOrganization }               = require("../data/organizationReposi
 const { upsertContact, linkContactToCase } = require("../data/contactRepository");
 const { pushCaseToClose, getContactsForCase } = require("../integrations/closeIntegration");
 const { query }                            = require("../db/connection");
+const { matchesAnyName }                   = require("../nameMatch");
 const logger                               = require("../logger");
 
 const LOOKBACK_DAYS   = parseInt(process.env.DAILY_SEARCH_LOOKBACK_DAYS || "3",  10);
@@ -139,9 +140,15 @@ async function saveCaseToDb(hydratedCase, runId, dryRun) {
 
   const US_TRUSTEE = /u\.?s\.?\s*trustee|united states trustee|department of justice/i;
 
+  const attorneyNames = (hydratedCase.attorneys || []).map(a => a.name).filter(Boolean);
+
   for (const p of (hydratedCase.principals || [])) {
     const pName = cleanName(p.name);
     if (!pName || pName.length < 3) continue;
+    if (matchesAnyName(pName, attorneyNames)) {
+      logger.warn("Skipping principal '" + pName + "' — matches a case attorney");
+      continue;
+    }
     const confidence = p.confidence === "HIGH" ? 0.9 : p.confidence === "MEDIUM" ? 0.6 : 0.3;
     const contact = await upsertContact({
       full_name:                pName,
@@ -241,6 +248,12 @@ async function autoEnrichCase(hydratedCase, caseDbId, orgId) {
 
     const ownerName = cleanName(owner.name);
     if (!ownerName) return enriched;
+
+    const attorneyNames = (hydratedCase.attorneys || []).map(a => a.name).filter(Boolean);
+    if (matchesAnyName(ownerName, attorneyNames)) {
+      logger.warn("Auto-enrich: rejecting owner '" + ownerName + "' for " + caseName + " — matches a case attorney");
+      return enriched;
+    }
 
     const ai     = enriched.aiData || {};
     const emails = ai.ownerEmails || [];
