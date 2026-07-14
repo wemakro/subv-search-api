@@ -1,6 +1,15 @@
-// Extracts principals from all available evidence sources
-// Priority: petition signer > party data > docket entries
-// Never invents names, emails, or phone numbers
+// src/principalExtractor.js
+// Extracts principals from all available evidence sources.
+// Priority: petition signer > equity holders > party data.
+// Never invents names, emails, or phone numbers.
+//
+// v2 CHANGES:
+// - Accepts the case's attorney list and rejects any principal whose
+//   name matches an attorney (final safety net — extraction upstream
+//   already filters, this catches anything that slips through).
+// - Attorney-signal words in a name or role also cause rejection.
+
+const { isAttorneyName } = require("./petitionTextExtractor");
 
 const HIGH_CONFIDENCE_ROLES = [
   "managing member","sole member","president","ceo","chief executive",
@@ -22,14 +31,21 @@ function isMediumConfidenceRole(role) {
   return MEDIUM_CONFIDENCE_ROLES.some(h => r.includes(h));
 }
 
-function fromPetitionFields(petitionFields) {
+function roleLooksLikeAttorney(role) {
+  if (!role) return false;
+  return /\b(attorney|counsel|esq|lawyer|legal)\b/i.test(role);
+}
+
+function fromPetitionFields(petitionFields, attorneyNames) {
   const results = [];
   if (!petitionFields) return results;
 
-  // Signer / authorized representative — highest confidence
-  const signerName = petitionFields.signerName || petitionFields.authorizedRepresentativeName;
+  const signerName  = petitionFields.signerName || petitionFields.authorizedRepresentativeName;
   const signerTitle = petitionFields.signerTitle || petitionFields.authorizedRepresentativeTitle;
-  if (signerName && signerName.length >= 4) {
+
+  if (signerName && signerName.length >= 4
+      && !isAttorneyName(signerName, attorneyNames)
+      && !roleLooksLikeAttorney(signerTitle)) {
     results.push({
       name:             signerName,
       role:             signerTitle || "Petition Signer",
@@ -49,13 +65,13 @@ function fromPetitionFields(petitionFields) {
     });
   }
 
-  // Role-based candidates from petition text
   for (const cand of (petitionFields.principalCandidates || [])) {
     if (!cand.name || cand.name.length < 4) continue;
+    if (isAttorneyName(cand.name, attorneyNames)) continue;
+    if (roleLooksLikeAttorney(cand.role)) continue;
     const conf = isHighConfidenceRole(cand.role) ? "HIGH"
                : isMediumConfidenceRole(cand.role) ? "MEDIUM" : null;
     if (!conf) continue;
-    // Don't duplicate if already captured as signer
     if (results.some(r => r.name === cand.name)) continue;
     results.push({
       name:       cand.name,
@@ -72,38 +88,46 @@ function fromPetitionFields(petitionFields) {
     });
   }
 
-  // Owner names from equity holders section
+  // Owner names from equity holders / corporate ownership statement —
+  // these come from the ownership documents that hydration now reads.
   for (const name of (petitionFields.ownerNames || [])) {
+    if (isAttorneyName(name, attorneyNames)) continue;
     if (results.some(r => r.name === name)) continue;
     results.push({
       name, role: "Equity Security Holder", title: "Owner",
-      company: null, address: null, email: null, phone: null,
-      source: "Petition text (equity security holders)",
+      company: petitionFields.debtorName || null,
+      address: null, email: null, phone: null,
+      source: "Ownership document (equity security holders / corporate ownership statement)",
       sourceDocumentId: null, sourceUrl: null,
-      confidence: "MEDIUM", evidence: [], isPrimary: false
+      confidence: "HIGH", // named on an ownership document — strong signal
+      evidence: [], isPrimary: false
     });
   }
 
   return results;
 }
 
-function fromPartyData(parties) {
+function fromPartyData(parties, attorneyNames) {
   const results = [];
   const principalRoles = [
     "debtor","officer","director","member","principal","owner","partner",
     "authorized representative","managing member","president","ceo"
   ];
   for (const p of (parties || [])) {
-    const roleStr = (p.party_types || []).map(t => (t.name||"").toLowerCase()).join(" ");
+    const roleStr = (p.party_types || p.type ? [(p.type||"")] : [])
+      .concat((p.party_types || []).map(t => (t.name||"")))
+      .join(" ").toLowerCase();
     const isRelevant = principalRoles.some(r => roleStr.includes(r));
     if (!isRelevant) continue;
-    const conf = isHighConfidenceRole(roleStr) ? "MEDIUM" : "LOW"; // downgrade because party data is less reliable
+    if (isAttorneyName(p.name, attorneyNames)) continue;
+    if (roleLooksLikeAttorney(roleStr)) continue;
+    const conf = isHighConfidenceRole(roleStr) ? "MEDIUM" : "LOW";
     results.push({
       name:       p.name || "",
-      role:       p.party_types ? p.party_types.map(t => t.name).join(", ") : "Unknown",
+      role:       roleStr || "Unknown",
       title:      null,
       company:    null,
-      address:    p.extra_info || null,
+      address:    p.extraInfo || p.extra_info || null,
       email:      null, phone: null,
       source:     "CourtListener /parties",
       sourceDocumentId: null, sourceUrl: null,
@@ -115,10 +139,16 @@ function fromPartyData(parties) {
   return results;
 }
 
-function extractPrincipals({ parties, petitionFields }) {
+// attorneys: normalized attorney array from hydration — names are extracted
+// here into a rejection list applied to every principal source.
+function extractPrincipals({ parties, petitionFields, attorneys }) {
+  const attorneyNames = (attorneys || [])
+    .map(a => a.name || "")
+    .filter(n => n.length > 3);
+
   const all = [
-    ...fromPetitionFields(petitionFields),
-    ...fromPartyData(parties),
+    ...fromPetitionFields(petitionFields, attorneyNames),
+    ...fromPartyData(parties, attorneyNames),
   ];
 
   // Deduplicate by name
@@ -129,7 +159,7 @@ function extractPrincipals({ parties, petitionFields }) {
     if (!seen.has(key)) { seen.add(key); deduped.push(p); }
   }
 
-  // Sort: HIGH > MEDIUM > LOW, isPrimary first
+  // Sort: isPrimary first, then HIGH > MEDIUM > LOW
   const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   deduped.sort((a, b) => {
     if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
