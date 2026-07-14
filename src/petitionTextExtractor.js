@@ -1,19 +1,42 @@
-// Extracts structured fields from petition plain text
-// Conservative: only returns values with surrounding evidence
+// src/petitionTextExtractor.js
+// Extracts structured fields from petition plain text.
+// Conservative: only returns values with surrounding evidence.
+//
+// v2 CHANGES:
+// - Attorney signature blocks are located and BLANKED before extracting
+//   debtor/signer fields, so the attorney's name and phone can never be
+//   attributed to the owner.
+// - Every extracted name is cross-checked against the case's known
+//   attorney list (passed in from hydration) and rejected on match.
+// - Attorney fields are extracted FIRST from the full text, then the
+//   attorney regions are removed for all remaining extraction.
 
 const NAME_PATTERN = /[A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,4}/;
 
+// Regions of the document that belong to the attorney — these get blanked
+// before any owner/signer extraction runs.
+const ATTORNEY_REGION_PATTERNS = [
+  /signature\s+of\s+attorney[\s\S]{0,700}/gi,
+  /attorney\s+for\s+(?:the\s+)?debtor\(?s?\)?[\s\S]{0,500}/gi,
+  /\/s\/\s*[A-Z][^\n]{2,60}\n[^\n]{0,80}(?:bar\s+(?:no|number)|esq)[\s\S]{0,300}/gi,
+  /counsel\s+for\s+(?:the\s+)?debtor[\s\S]{0,400}/gi,
+];
+
+// Signals that a name string is an attorney, not a business owner
+const ATTORNEY_NAME_SIGNALS = [
+  /\besq\.?\b/i, /\bj\.?d\.?\b/i, /\battorney\b/i, /\bcounsel\b/i,
+  /\blaw\s+(?:firm|office|group|offices)\b/i, /\bllp\b/i, /\bpllc\b/i,
+  /\bp\.?c\.?\b/i, /\bbar\s+(?:no|number)\b/i, /\blawyer\b/i,
+];
+
 const FIELD_PATTERNS = [
-  // Signer / authorized representative
   {
     field: "signerName",
     patterns: [
-      /\/s\/\s+([A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,4})/,
       /signature\s+of\s+authorized\s+representative[^\n]{0,80}\n([^\n]{3,80})/i,
       /signature\s+of\s+debtor[^\n]{0,80}\n([^\n]{3,80})/i,
       /i\s+have\s+been\s+authorized\s+to\s+file[^\n]{0,200}(?:by|on behalf of)\s+([A-Z][^\n,]{3,60})/i,
       /authorized\s+(?:representative|signatory)[^\n]{0,60}\n([^\n]{3,80})/i,
-      /printed\s+name\s+of\s+authorized\s+representative[:\s\n]+([^\n,]{3,80})/i,
     ]
   },
   {
@@ -64,12 +87,17 @@ const FIELD_PATTERNS = [
       /email[:\s]+([\w.+-]+@[\w\-]+\.[a-z]{2,})/i,
     ]
   },
+];
+
+// Attorney fields are extracted from the FULL text before blanking
+const ATTORNEY_FIELD_PATTERNS = [
   {
     field: "attorneyName",
     patterns: [
       /name\s+of\s+attorney[:\s\n]+([^\n,]{3,80})/i,
       /attorney\s+for\s+debtor[:\s\n]+([^\n,]{3,80})/i,
       /debtor['s\s]+attorney[:\s\n]+([^\n,]{3,80})/i,
+      /signature\s+of\s+attorney[^\n]{0,80}\n([^\n]{3,80})/i,
     ]
   },
   {
@@ -88,8 +116,7 @@ const FIELD_PATTERNS = [
   {
     field: "attorneyPhone",
     patterns: [
-      /attorney[^\n]{0,50}phone[:\s]+(\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})/i,
-      /attorney[^\n]{0,50}telephone[:\s]+(\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})/i,
+      /attorney[^\n]{0,50}(?:phone|telephone)[:\s]+(\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})/i,
     ]
   },
 ];
@@ -109,6 +136,48 @@ const ROLE_PATTERNS = [
   { role: "Treasurer",                  pattern: /\btreasurer\b/i },
   { role: "Secretary",                  pattern: /\bsecretary\b/i },
 ];
+
+// ── Name normalization + attorney matching ─────────────────────────────────
+function normalizeName(name) {
+  return (name || "")
+    .toLowerCase()
+    .replace(/\b(esq\.?|jr\.?|sr\.?|ii|iii|iv|j\.?d\.?)\b/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function namesMatch(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb || na.length < 4 || nb.length < 4) return false;
+  if (na === nb) return true;
+  // One fully contains the other (handles middle names/initials)
+  if (na.includes(nb) || nb.includes(na)) return true;
+  // Same last name + same first initial
+  const pa = na.split(" "), pb = nb.split(" ");
+  if (pa.length >= 2 && pb.length >= 2) {
+    if (pa[pa.length-1] === pb[pb.length-1] && pa[0][0] === pb[0][0]) return true;
+  }
+  return false;
+}
+
+function isAttorneyName(name, knownAttorneyNames) {
+  if (!name) return false;
+  // Signal words in the name string itself
+  if (ATTORNEY_NAME_SIGNALS.some(p => p.test(name))) return true;
+  // Cross-check against the case's known attorney list
+  return (knownAttorneyNames || []).some(a => namesMatch(name, a));
+}
+
+// ── Blank attorney regions so owner extraction can't touch them ────────────
+function stripAttorneyRegions(text) {
+  let cleaned = text;
+  for (const pattern of ATTORNEY_REGION_PATTERNS) {
+    cleaned = cleaned.replace(pattern, match => " ".repeat(match.length));
+  }
+  return cleaned;
+}
 
 function extractField(text, fieldDef) {
   for (const pattern of fieldDef.patterns) {
@@ -145,27 +214,59 @@ function extractRolesNearNames(text) {
   return candidates;
 }
 
-function extractPetitionFields(text) {
+// ── MAIN ────────────────────────────────────────────────────────────────────
+// options.attorneyNames: array of attorney names from CourtListener /attorneys
+// Every extracted owner-side name is rejected if it matches this list.
+function extractPetitionFields(text, options) {
+  options = options || {};
+  const knownAttorneyNames = options.attorneyNames || [];
+
   if (!text || text.length < 50) {
     return { _empty: true, evidenceSnippets: [] };
   }
 
   const result = { evidenceSnippets: [] };
 
-  for (const fieldDef of FIELD_PATTERNS) {
+  // STEP 1: Extract attorney fields from the FULL text (before blanking)
+  for (const fieldDef of ATTORNEY_FIELD_PATTERNS) {
     const found = extractField(text, fieldDef);
     if (found) {
       result[fieldDef.field] = found.value;
-      result.evidenceSnippets.push({
-        field: fieldDef.field,
-        value: found.value,
-        snippet: found.snippet
-      });
+      result.evidenceSnippets.push({ field: fieldDef.field, value: found.value, snippet: found.snippet });
     }
   }
 
-  // Role-near-name extraction for principalCandidates
-  const roleCandidates = extractRolesNearNames(text);
+  // Add the extracted attorney name to the rejection list
+  const rejectList = [...knownAttorneyNames];
+  if (result.attorneyName) rejectList.push(result.attorneyName);
+
+  // STEP 2: Blank all attorney regions, then extract owner-side fields
+  // from the cleaned text — attorney's name and phone are physically gone.
+  const cleaned = stripAttorneyRegions(text);
+
+  for (const fieldDef of FIELD_PATTERNS) {
+    const found = extractField(cleaned, fieldDef);
+    if (found) {
+      result[fieldDef.field] = found.value;
+      result.evidenceSnippets.push({ field: fieldDef.field, value: found.value, snippet: found.snippet });
+    }
+  }
+
+  // STEP 3: Reject any owner-side name that matches an attorney
+  for (const nameField of ["signerName", "authorizedRepresentativeName"]) {
+    if (result[nameField] && isAttorneyName(result[nameField], rejectList)) {
+      result.evidenceSnippets.push({
+        field: nameField + "_rejected",
+        value: result[nameField],
+        snippet: "REJECTED: matches case attorney list"
+      });
+      delete result[nameField];
+    }
+  }
+
+  // STEP 4: Role-based candidates from cleaned text, attorney-filtered
+  const roleCandidates = extractRolesNearNames(cleaned)
+    .filter(c => !isAttorneyName(c.name, rejectList));
   if (roleCandidates.length > 0) {
     result.principalCandidates = roleCandidates;
     roleCandidates.forEach(c => {
@@ -177,16 +278,31 @@ function extractPetitionFields(text) {
     });
   }
 
-  // Owner names from "List of Equity Security Holders" section
-  const equitySection = text.match(/equity\s+security\s+holders[\s\S]{0,2000}/i);
+  // STEP 5: Owner names from "List of Equity Security Holders" section
+  const equitySection = cleaned.match(/equity\s+security\s+holders[\s\S]{0,3000}/i);
   if (equitySection) {
-    const names = [...equitySection[0].matchAll(/([A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,3})\s+\d+[\.\s]/g)];
-    if (names.length > 0) {
-      result.ownerNames = names.map(m => m[1].trim());
+    const names = [...equitySection[0].matchAll(/([A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,3})\s+\d+[\.\s%]/g)];
+    const ownerNames = names
+      .map(m => m[1].trim())
+      .filter(n => !isAttorneyName(n, rejectList));
+    if (ownerNames.length > 0) result.ownerNames = ownerNames;
+  }
+
+  // STEP 6: Corporate Ownership Statement — "X owns 10% or more"
+  const cosSection = cleaned.match(/corporate\s+ownership\s+statement[\s\S]{0,2000}|own[s]?\s+10%\s+or\s+more[\s\S]{0,1000}/i);
+  if (cosSection) {
+    const cosNames = [...cosSection[0].matchAll(/([A-Z][a-zA-Z'\-\.]+(?:\s+[A-Z][a-zA-Z'\-\.]+){1,3})/g)]
+      .map(m => m[1].trim())
+      .filter(n => n.split(" ").length >= 2)
+      .filter(n => !/\b(corporate|ownership|statement|united|states|bankruptcy|court|district|chapter|debtor|form|official|rule)\b/i.test(n))
+      .filter(n => !isAttorneyName(n, rejectList))
+      .slice(0, 5);
+    if (cosNames.length > 0) {
+      result.ownerNames = [...new Set([...(result.ownerNames || []), ...cosNames])];
     }
   }
 
   return result;
 }
 
-module.exports = { extractPetitionFields };
+module.exports = { extractPetitionFields, isAttorneyName, namesMatch };
