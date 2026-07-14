@@ -9,6 +9,13 @@ const logger = require("./logger");
 
 const CL = "https://www.courtlistener.com";
 
+// Ownership document types — these NAME THE OWNERS and must always be read,
+// even when petition documents outrank them by relevance score.
+const OWNERSHIP_DOC_TYPES = [
+  "Corporate Ownership Statement",
+  "Equity Security Holders",
+];
+
 async function safeGet(path, label, debug) {
   try {
     debug.endpointsCalled.push(path);
@@ -36,7 +43,6 @@ async function safeList(path, params, label, debug) {
 }
 
 function extractTrustee(parties, bkData) {
-  // Try bankruptcy metadata first
   if (bkData?.trustee_name) {
     return {
       name: bkData.trustee_name,
@@ -66,6 +72,7 @@ function normalizeParties(parties) {
     role: (p.party_types||[]).map(t=>t.name).join(", "),
     extraInfo: p.extra_info||null,
     attorneyIds: (p.attorneys||[]).map(a=>a.id||a),
+    party_types: p.party_types || [],
     source: "CourtListener /parties"
   }));
 }
@@ -83,19 +90,57 @@ function normalizeAttorneys(attorneys, parties) {
     const contact = a.contact_raw||a.contact||"";
     const emailMatch = contact.match(/[\w.+-]+@[\w-]+\.[a-z]{2,}/i);
     const phoneMatch = contact.match(/\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/);
-    const isUSTrusteeOffice = /united states trustee|office of (the )?us trustee/i.test(contact);
     return {
       id: a.id||null, name: a.name||"",
-      firm: isUSTrusteeOffice ? "Office of the United States Trustee" : (a.firm_name||null),
+      firm: a.firm_name||null,
       email: emailMatch?.[0]||null,
       phone: phoneMatch?.[0]?.trim()||null,
       fax: null,
       contactRaw: contact||null,
       representing: attyToParties[a.id]||[],
-      isUSTrusteeOffice,
       source: "CourtListener /attorneys"
     };
   });
+}
+
+// ── Document selection ──────────────────────────────────────────────────────
+// v2: The old code took the top 3 by relevance score. Voluntary Petition
+// entries (score 100) always crowded out Corporate Ownership Statements (75)
+// and Equity Security Holder lists (70) — the documents that literally name
+// the owners were never opened.
+//
+// New selection: top 2 petition-type docs + ALL ownership-type docs (up to 3)
+// + fill remaining slots by score. Cap 6 documents total per case.
+function selectDocumentsToRead(petitionDocuments) {
+  const withDocId = petitionDocuments.filter(d => d.recapDocumentId);
+
+  const ownership = withDocId
+    .filter(d => OWNERSHIP_DOC_TYPES.includes(d.documentTypeGuess))
+    .slice(0, 3);
+
+  const petitions = withDocId
+    .filter(d => /petition/i.test(d.documentTypeGuess || ""))
+    .slice(0, 2);
+
+  const selected = [];
+  const seen = new Set();
+  for (const d of [...petitions, ...ownership]) {
+    const key = d.recapDocumentId;
+    if (!seen.has(key)) { seen.add(key); selected.push(d); }
+  }
+
+  // Fill remaining slots (up to 6) with the highest-scored leftovers
+  for (const d of withDocId) {
+    if (selected.length >= 6) break;
+    const key = d.recapDocumentId;
+    if (!seen.has(key)) { seen.add(key); selected.push(d); }
+  }
+
+  // If nothing has a recap document, keep the top 3 entries anyway so
+  // downstream warnings fire correctly.
+  if (selected.length === 0) return petitionDocuments.slice(0, 3);
+
+  return selected;
 }
 
 async function hydrateDocket(docketId) {
@@ -115,7 +160,8 @@ async function hydrateDocket(docketId) {
   const parties = await safeList("/api/rest/v4/parties/", { docket: docketId }, "parties", debug);
   if (!parties.length) debug.missingData.push("No parties returned");
 
-  // 4. Attorneys
+  // 4. Attorneys — fetched BEFORE document reading so the attorney list is
+  // available to the petition text extractor for name rejection.
   const attorneys = await safeList(
     "/api/rest/v4/attorneys/",
     { docket: docketId, filter_nested_results: "True" },
@@ -123,7 +169,16 @@ async function hydrateDocket(docketId) {
   );
   if (!attorneys.length) debug.missingData.push("No attorneys returned");
 
-  // 5. Petition documents
+  const normParties    = normalizeParties(parties);
+  const normAttorneys  = normalizeAttorneys(attorneys, parties);
+
+  // Attorney names for extraction-time rejection — includes firm names
+  const attorneyNames = [
+    ...normAttorneys.map(a => a.name).filter(Boolean),
+    ...normAttorneys.map(a => a.firm).filter(Boolean),
+  ];
+
+  // 5. Find candidate documents
   let petitionDocuments = [];
   try {
     petitionDocuments = await findPetitionDocuments(docketId);
@@ -135,12 +190,17 @@ async function hydrateDocket(docketId) {
     debug.nextBestActions.push("Manual review of CourtListener docket recommended.");
   }
 
-  // 6. Fetch petition text from top RECAP document
+  // 6. Read selected documents — petition + ownership docs
+  const docsToRead = selectDocumentsToRead(petitionDocuments);
+  const ownershipDocsSelected = docsToRead.filter(d => OWNERSHIP_DOC_TYPES.includes(d.documentTypeGuess)).length;
+  logger.info(`Docket ${docketId}: reading ${docsToRead.length} documents (${ownershipDocsSelected} ownership docs)`);
+
   let petitionFields = {};
+  let combinedOwnerNames = [];
   let petitionDocumentsWithText = 0;
   const petitionDocumentsOut = [];
 
-  for (const doc of petitionDocuments.slice(0, 3)) {
+  for (const doc of docsToRead) {
     let textResult = { available: false, text: "", textPreview: "", extractionMethod: "not_available", warnings: [] };
     if (doc.recapDocumentId) {
       textResult = await getRecapDocumentText(doc.recapDocumentId);
@@ -162,10 +222,33 @@ async function hydrateDocket(docketId) {
       warnings:         [...doc.reasons, ...(textResult.warnings||[])]
     });
 
-    // Extract from best available text
-    if (textResult.available && textResult.text && !petitionFields.signerName) {
-      petitionFields = extractPetitionFields(textResult.text);
+    if (textResult.available && textResult.text) {
+      // Extract from every readable document with attorney rejection active
+      const extracted = extractPetitionFields(textResult.text, { attorneyNames });
+
+      // First document with a signer wins the main fields
+      if (!petitionFields.signerName && !petitionFields.authorizedRepresentativeName) {
+        petitionFields = { ...extracted, ...petitionFields };
+      }
+
+      // Owner names accumulate across ALL documents read — this is where
+      // Corporate Ownership Statements and Equity Holder lists contribute.
+      if (extracted.ownerNames && extracted.ownerNames.length) {
+        combinedOwnerNames.push(...extracted.ownerNames);
+      }
+
+      // Merge evidence snippets
+      if (extracted.evidenceSnippets?.length) {
+        petitionFields.evidenceSnippets = [
+          ...(petitionFields.evidenceSnippets || []),
+          ...extracted.evidenceSnippets
+        ];
+      }
     }
+  }
+
+  if (combinedOwnerNames.length) {
+    petitionFields.ownerNames = [...new Set([...(petitionFields.ownerNames || []), ...combinedOwnerNames])];
   }
 
   if (petitionDocumentsWithText === 0) {
@@ -173,10 +256,8 @@ async function hydrateDocket(docketId) {
     debug.nextBestActions.push("Add contact enrichment provider after confirming principal name manually.");
   }
 
-  // 7. Principals
-  const normParties    = normalizeParties(parties);
-  const normAttorneys  = normalizeAttorneys(attorneys, parties);
-  const principals     = extractPrincipals({ parties: normParties, petitionFields });
+  // 7. Principals — attorney list passed for final rejection filter
+  const principals = extractPrincipals({ parties: normParties, petitionFields, attorneys: normAttorneys });
 
   if (!principals.length) {
     debug.warnings.push("Principal not found in petition text.");
@@ -191,7 +272,7 @@ async function hydrateDocket(docketId) {
   const trustee = extractTrustee(parties, bkData);
   if (!trustee.name) debug.missingData.push("Trustee not found in bankruptcy metadata or parties.");
 
-  // 10. Debtor
+  // 10. Debtor — phone/email only attributed if it survived attorney blanking
   const debtor = {
     name:    petitionFields.debtorName || docket.case_name || "",
     address: petitionFields.debtorAddress || null,
@@ -201,7 +282,7 @@ async function hydrateDocket(docketId) {
     confidence: petitionFields.debtorName ? "HIGH" : "MEDIUM"
   };
 
-  // 11. Outreach contacts
+  // 11. Assemble
   const hydratedCase = {
     docketId,
     caseName:     docket.case_name      || "",
@@ -229,6 +310,7 @@ async function hydrateDocket(docketId) {
       docketEntriesCount:         petitionDocuments.length,
       petitionDocumentsCount:     petitionDocumentsOut.length,
       petitionDocumentsWithTextCount: petitionDocumentsWithText,
+      ownershipDocumentsReadCount: ownershipDocsSelected,
       principalsCount:            principals.length,
       outreachContactsCount:      0
     }
@@ -237,7 +319,7 @@ async function hydrateDocket(docketId) {
   hydratedCase.outreachContacts = buildOutreachContacts(hydratedCase);
   hydratedCase.rawCounts.outreachContactsCount = hydratedCase.outreachContacts.length;
 
-  logger.info(`Hydration complete for ${docketId}: ${principals.length} principals, ${normAttorneys.length} attorneys, ${petitionDocumentsWithText} docs with text`);
+  logger.info(`Hydration complete for ${docketId}: ${principals.length} principals, ${normAttorneys.length} attorneys, ${petitionDocumentsWithText} docs with text (${ownershipDocsSelected} ownership)`);
   return hydratedCase;
 }
 
