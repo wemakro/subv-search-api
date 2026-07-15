@@ -257,7 +257,7 @@ async function hydrateDocket(docketId) {
   }
 
   // 7. Principals — attorney list passed for final rejection filter
-  const principals = extractPrincipals({ parties: normParties, petitionFields, attorneys: normAttorneys });
+  const principals = extractPrincipals({ parties: normParties, petitionFields, attorneys: normAttorneys, caseName: docket.case_name || "" });
 
   if (!principals.length) {
     debug.warnings.push("Principal not found in petition text.");
