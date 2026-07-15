@@ -107,7 +107,14 @@ function fromPetitionFields(petitionFields, attorneyNames) {
   return results;
 }
 
-function fromPartyData(parties, attorneyNames) {
+function namesEqualLoose(a, b) {
+  const clean = s => (s||"").toLowerCase().replace(/[.,']/g,"").replace(/\b(llc|inc|corp|corporation|company|co|lp|llp|ltd)\b/g,"").replace(/\s+/g," ").trim();
+  const ca = clean(a), cb = clean(b);
+  if (!ca || !cb) return false;
+  return ca === cb || ca.includes(cb) || cb.includes(ca);
+}
+
+function fromPartyData(parties, attorneyNames, debtorName) {
   const results = [];
   const principalRoles = [
     "debtor","officer","director","member","principal","owner","partner",
@@ -121,6 +128,8 @@ function fromPartyData(parties, attorneyNames) {
     if (!isRelevant) continue;
     if (isAttorneyName(p.name, attorneyNames)) continue;
     if (roleLooksLikeAttorney(roleStr)) continue;
+    // The debtor company itself is a party — never a principal contact
+    if (namesEqualLoose(p.name, debtorName)) continue;
     const conf = isHighConfidenceRole(roleStr) ? "MEDIUM" : "LOW";
     results.push({
       name:       p.name || "",
@@ -141,15 +150,17 @@ function fromPartyData(parties, attorneyNames) {
 
 // attorneys: normalized attorney array from hydration — names are extracted
 // here into a rejection list applied to every principal source.
-function extractPrincipals({ parties, petitionFields, attorneys }) {
+function extractPrincipals({ parties, petitionFields, attorneys, caseName }) {
   const attorneyNames = (attorneys || [])
     .map(a => a.name || "")
     .filter(n => n.length > 3);
 
+  const debtorName = (petitionFields && petitionFields.debtorName) || caseName || "";
+
   const all = [
     ...fromPetitionFields(petitionFields, attorneyNames),
-    ...fromPartyData(parties, attorneyNames),
-  ];
+    ...fromPartyData(parties, attorneyNames, debtorName),
+  ].filter(p => !namesEqualLoose(p.name, debtorName));
 
   // Deduplicate by name
   const seen = new Set();
