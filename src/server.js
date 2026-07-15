@@ -31,7 +31,7 @@ app.use((err, req, res, next) => {
 });
 
 // ── Run DB migrations on startup ───────────────────────────────────────────
-// These are safe to run every time — IF NOT EXISTS means they only apply once.
+// Safe to run every time — IF NOT EXISTS means they only apply once.
 async function runMigrations() {
   try {
     const { query } = require("./db/connection");
@@ -56,7 +56,34 @@ async function runMigrations() {
   }
 }
 
+// ── In-app daily scheduler ──────────────────────────────────────────────────
+// Fires the pipeline at 11:00 UTC (2PM Jerusalem) every day.
+// This lives in the app because there is no external Render cron service.
+// Dependency-free: checks the clock every minute; the pipeline's own lock
+// prevents double runs even if this fires twice.
+let lastScheduledRunDate = null;
+function startDailyScheduler() {
+  setInterval(() => {
+    try {
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      if (now.getUTCHours() === 11 && now.getUTCMinutes() < 5 && lastScheduledRunDate !== today) {
+        lastScheduledRunDate = today;
+        logger.info("In-app scheduler: firing daily pipeline (11:00 UTC)");
+        const { runDailyPipeline } = require("./jobs/dailyPipeline");
+        runDailyPipeline({ triggeredBy: "cron" })
+          .then(r => logger.info("Scheduled pipeline finished: " + JSON.stringify(r || {}).slice(0, 200)))
+          .catch(e => logger.error("Scheduled pipeline error: " + e.message));
+      }
+    } catch(e) {
+      logger.error("Scheduler tick error: " + e.message);
+    }
+  }, 60 * 1000);
+  logger.info("Daily scheduler armed — fires at 11:00 UTC");
+}
+
 app.listen(PORT, async () => {
   logger.info(`Sub-V Search API v3 running on port ${PORT}`);
   await runMigrations();
+  startDailyScheduler();
 });
