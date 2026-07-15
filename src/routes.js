@@ -155,17 +155,29 @@ router.get("/pipeline/run-test", async (req, res) => {
   }).catch(e => logger.error("Background pipeline error: " + e.message));
 });
 
-// ── Daily cron trigger (called by Render cron) ─────────────────────────────
-router.post("/jobs/run-daily", async (req, res) => {
-  if (req.query.secret !== process.env.CRON_SECRET && req.body?.secret !== process.env.CRON_SECRET) {
+// ── Daily cron trigger ──────────────────────────────────────────────────────
+// Accepts GET and POST on every historical path so no cron configuration
+// can miss it. The July 11 outage was caused by the endpoint only accepting
+// POST /jobs/run-daily while the cron was calling a different path/method.
+function handleCronTrigger(req, res) {
+  const secret = req.query.secret || req.body?.secret;
+  if (secret !== process.env.CRON_SECRET) {
+    logger.warn("Cron trigger rejected — bad/missing secret from " + (req.ip || "unknown"));
     return res.status(401).json({ error:"Unauthorized" });
   }
 
-  res.json({ status:"started", message:"Daily pipeline running in background" });
+  logger.info("Cron trigger received: " + req.method + " " + req.path);
+  res.json({ status:"started", message:"Daily pipeline running in background", path: req.path });
 
   runDailyPipeline({ triggeredBy:"cron" })
     .catch(e => logger.error("Daily pipeline error: " + e.message));
-});
+}
+
+router.all("/jobs/run-daily",     handleCronTrigger);
+router.all("/jobs/daily",         handleCronTrigger);
+router.all("/cron/daily",         handleCronTrigger);
+router.all("/pipeline/run-daily", handleCronTrigger);
+router.all("/cron/run-daily",     handleCronTrigger);
 
 // ── Close backfill ─────────────────────────────────────────────────────────
 // Pushes DB cases that are confirmed Sub-V but not yet in Close.
