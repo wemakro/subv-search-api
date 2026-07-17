@@ -5,6 +5,21 @@ const logger = require("../logger");
 const CLOSE_API_KEY = process.env.CLOSE_API_KEY || "";
 const CLOSE_BASE    = "api.close.com";
 
+// ── FEATURE FLAGS ──────────────────────────────────────────────────────────
+// AUTO_CREATE_OPPORTUNITY: when "true", every pushed lead gets an Opportunity
+//   in "Discovery Call Scheduled". Default OFF — a discovered court case is
+//   not a scheduled discovery call, and auto-opportunities corrupt pipeline
+//   reporting in Close. Set AUTO_CREATE_OPPORTUNITY=true in Render to restore
+//   the old behavior.
+// GUESSED_EMAILS_ON_CONTACTS: when "true", guessed addresses (info@domain,
+//   AI pattern guesses) are attached to the Close contact record itself.
+//   Default OFF — guessed addresses stay visible in the lead note (badged
+//   "⚠️ guessed") but are NOT saved as contact emails, so a Close sequence
+//   can never send to an unverified guess. Set to "true" to restore the old
+//   behavior.
+const AUTO_CREATE_OPPORTUNITY    = process.env.AUTO_CREATE_OPPORTUNITY === "true";
+const GUESSED_EMAILS_ON_CONTACTS = process.env.GUESSED_EMAILS_ON_CONTACTS === "true";
+
 // ── HTTP ───────────────────────────────────────────────────────────────────
 function closeRequest(method, path, body) {
   return new Promise(function(resolve, reject) {
@@ -256,6 +271,16 @@ function buildAllEmails(contact, enrichmentData) {
   return emails;
 }
 
+// ── EMAIL FILTER FOR CONTACT RECORDS ───────────────────────────────────────
+// The note shows every email with a confidence badge; the contact record is
+// what sequences actually send to, so only confirmed addresses belong there
+// unless GUESSED_EMAILS_ON_CONTACTS is explicitly enabled.
+function filterEmailsForContact(emails, allowGuessed) {
+  const allow = allowGuessed === undefined ? GUESSED_EMAILS_ON_CONTACTS : allowGuessed;
+  if (allow) return emails || [];
+  return (emails || []).filter(function(em) { return em._confidence === "confirmed"; });
+}
+
 // ── CONTACT PRIORITY SORT ──────────────────────────────────────────────────
 // AI-enriched principals first, then petition principals, then attorneys, then trustees
 function sortContacts(contacts) {
@@ -481,7 +506,9 @@ async function createContact(leadId, contact, enrichmentData) {
   if (isUSTrustee(contact)) return null;
 
   const allPhones = buildAllPhones(contact, enrichmentData);
-  const allEmails = buildAllEmails(contact, enrichmentData);
+  // Note keeps ALL emails with badges; the contact record gets confirmed only
+  // (unless GUESSED_EMAILS_ON_CONTACTS=true).
+  const allEmails = filterEmailsForContact(buildAllEmails(contact, enrichmentData));
 
   const title = isValidTitle(contact.title)
     ? (contact.title || null)
@@ -632,8 +659,13 @@ async function pushCaseToClose(caseRow, contacts, enrichmentData) {
     const noteHtml = buildNoteHtml(caseRow, contacts||[], e);
     await createNote(leadId, noteHtml);
 
-    // Opportunity
-    await createOpportunity(leadId, caseRow);
+    // Opportunity — only when explicitly enabled. A discovered case is not a
+    // scheduled discovery call; default is no auto-opportunity.
+    if (AUTO_CREATE_OPPORTUNITY) {
+      await createOpportunity(leadId, caseRow);
+    } else {
+      logger.info("Close: opportunity skipped (AUTO_CREATE_OPPORTUNITY off) — " + caseName);
+    }
 
     logger.info("Close: fully created — " + caseName + " (" + caseNumber + ") — " + principals.length + " principals, " + attorneys.length + " attorneys");
     return { success: true, leadId, caseName, caseNumber, principalCount: principals.length };
@@ -723,4 +755,4 @@ async function updateLeadInClose(leadId, caseRow, contacts, enrichmentData) {
   }
 }
 
-module.exports = { pushCaseToClose, pushCasesToClose, getContactsForCase, buildNoteHtml, buildAllEmails, buildAllPhones, updateLeadInClose };
+module.exports = { pushCaseToClose, pushCasesToClose, getContactsForCase, buildNoteHtml, buildAllEmails, buildAllPhones, filterEmailsForContact, updateLeadInClose };
