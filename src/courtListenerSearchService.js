@@ -1,19 +1,21 @@
-"use strict";
 const { getAllPages } = require("./courtListenerClient");
 const logger = require("./logger");
 
 const SEARCH_TEMPLATES = [
   {
-    // Primary: newest Sub-V Chapter 11 docket filings first
     name: "docket-subv",
     type: "d",
-    q: '"Subchapter V" "Chapter 11"',
+    q: 'chapter:11 AND ("subchapter v" OR "subchapter 5" OR "small business debtor")',
   },
   {
-    // Secondary: catch filings that use "small business debtor" phrasing
-    name: "docket-sbd",
-    type: "d",
-    q: '"small business debtor" "Chapter 11"',
+    name: "recap-subv",
+    type: "r",
+    q: '("Subchapter V" OR "Subchapter 5" OR "election of subchapter v" OR "small business debtor") AND chapter:11',
+  },
+  {
+    name: "filing-subv",
+    type: "rd",
+    q: '("Voluntary Petition" OR "Official Form 201" OR "Subchapter V" OR "small business debtor") AND chapter:11',
   },
 ];
 
@@ -27,45 +29,30 @@ async function runTemplate(template, { dateFrom, dateTo, court, maxPages }) {
   const params = {
     type:      template.type,
     q:         template.q + buildDateQ(dateFrom, dateTo),
-    order_by:  "dateFiled desc",  // NEWEST FIRST — ensures current filings are always processed
+    order_by:  "score desc",
     page_size: 20,
   };
   if (court && court !== "all") params.court = court;
 
-  logger.info(`Search [${template.name}] type=${template.type} order=dateFiled desc q="${params.q}"`);
+  logger.info(`Search template [${template.name}] type=${template.type} court=${court||"all"}`);
 
-  let hits = [];
-  try {
-    hits = await getAllPages("/api/rest/v4/search/", params, { maxPages });
-  } catch(e) {
-    logger.warn(`Template [${template.name}] failed: ${e.message}`);
-    return [];
-  }
-
+  const hits = await getAllPages("/api/rest/v4/search/", params, { maxPages });
   logger.info(`Template [${template.name}] returned ${hits.length} hits`);
-
-  return hits.map(function(h) {
-    return {
-      docketId:     h.docket_id      || h.id              || null,
-      searchType:   template.name,
-      caseName:     (h.caseName      || h.case_name        || "").replace(/,?\s*debtor\s*$/i, "").trim(),
-      docketNumber: h.docketNumber   || h.docket_number    || "",
-      courtId:      h.court_id       || h.court            || "",
-      courtName:    h.court          || "",
-      dateFiled:    h.dateFiled      || h.date_filed       || "",
-      chapter:      h.chapter        || null,
-      assignedTo:   h.assignedTo     || h.assigned_to      || null,
-      trusteeStr:   h.trustee_str    || null,
-      attorney:     h.attorney       || [],
-      firm:         h.firm           || [],
-      absoluteUrl:  h.docket_absolute_url
+  return hits.map(h => ({
+    docketId:    h.docket_id   || h.id        || null,
+    searchType:  template.name,
+    caseName:    h.caseName    || h.case_name  || "",
+    docketNumber:h.docketNumber|| h.docket_number || "",
+    courtId:     h.court_id    || h.court      || "",
+    dateFiled:   h.dateFiled   || h.date_filed || "",
+    absoluteUrl: h.absolute_url
+      ? "https://www.courtlistener.com" + h.absolute_url
+      : h.docket_absolute_url
         ? "https://www.courtlistener.com" + h.docket_absolute_url
-        : h.absolute_url
-          ? "https://www.courtlistener.com" + h.absolute_url
-          : "",
-      matchedQuery: template.q,
-    };
-  });
+        : "",
+    matchedQuery: template.q,
+    rawPreview:  JSON.stringify(h).slice(0, 300),
+  }));
 }
 
 async function discoverSubchapterVCases({ dateFrom, dateTo, court = "all", maxPages = 5 }) {
@@ -76,29 +63,24 @@ async function discoverSubchapterVCases({ dateFrom, dateTo, court = "all", maxPa
       const hits = await runTemplate(tmpl, { dateFrom, dateTo, court, maxPages });
       allHits.push(...hits);
     } catch(e) {
-      logger.warn(`Template [${tmpl.name}] failed: ${e.message}`);
+      logger.warn(`Template [${tmpl.name}] failed: ${e.message || JSON.stringify(e)}`);
     }
   }
 
-  // Deduplicate by docketId
-  const seen    = new Set();
+  // Deduplicate by docketId, and skip adversary proceedings
+  // (docket numbers containing "-ap-" are lawsuits inside a bankruptcy,
+  // e.g. "8:26-ap-00201" — not new Sub-V cases, not leads)
+  const seen = new Set();
   const deduped = [];
+  let adversarySkipped = 0;
   for (const h of allHits) {
+    if ((h.docketNumber || "").includes("-ap-")) { adversarySkipped++; continue; }
     const key = h.docketId ? String(h.docketId) : h.caseName + h.docketNumber;
     if (!seen.has(key)) { seen.add(key); deduped.push(h); }
   }
 
-  // Remove entries with no docketId or obviously bad names
-  const BAD_NAMES = /^(unknown|and the case|official form|voluntary petition|in re:|case number)/i;
-  const filtered = deduped.filter(function(h) {
-    if (!h.docketId) return false;
-    if (!h.caseName) return false;
-    if (BAD_NAMES.test(h.caseName)) return false;
-    return true;
-  });
-
-  logger.info(`Discovery: ${allHits.length} total, ${deduped.length} unique, ${filtered.length} after filter`);
-  return filtered;
+  logger.info(`Discovery complete: ${allHits.length} total hits, ${deduped.length} unique dockets, ${adversarySkipped} adversary proceedings skipped`);
+  return deduped;
 }
 
 module.exports = { discoverSubchapterVCases };
