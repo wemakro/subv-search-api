@@ -6,9 +6,9 @@
   "engines": { "node": "20.x" },
   "scripts": {
     "start": "node src/server.js",
-    "migrate": "node src/db/migrate.js",
-    "test": "node --test test/closeIntegration.test.js",
-    "test:cl": "node scripts/testCourtListener.js"
+    "test:cl": "node scripts/testCourtListener.js",
+    "test:petition": "node scripts/testPetitionExtraction.js",
+    "test:parser": "node scripts/testDescriptionParser.js"
   },
   "dependencies": {
     "cors": "2.8.5",
