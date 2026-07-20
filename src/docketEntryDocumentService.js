@@ -6,7 +6,10 @@ const PETITION_TERMS = [
   { term: "official form 201",             score: 100, type: "Voluntary Petition" },
   { term: "chapter 11 voluntary petition", score: 95,  type: "Voluntary Petition" },
   { term: "chapter 11 petition",           score: 90,  type: "Petition" },
+  { term: "notice of chapter 11 bankruptcy case", score: 88, type: "309 Notice" },
+  { term: "341 notice",                    score: 85,  type: "309 Notice" },
   { term: "subchapter v election",         score: 85,  type: "Subchapter V Election" },
+  { term: "appointment of",                score: 82,  type: "Trustee Appointment" },
   { term: "small business debtor",         score: 80,  type: "Small Business Election" },
   { term: "corporate ownership statement", score: 75,  type: "Corporate Ownership Statement" },
   { term: "statement of corporate",        score: 75,  type: "Corporate Ownership Statement" },
@@ -34,13 +37,23 @@ function scoreEntry(description) {
   return best;
 }
 
-async function findPetitionDocuments(docketId) {
-  logger.info(`Finding petition documents for docket ${docketId}`);
-  const entries = await getAllPages(
+// Single source of truth for pulling a docket's entries.
+// Fetched ONCE per hydration and shared between petition-document detection
+// and the description parser.
+async function fetchDocketEntries(docketId) {
+  logger.info(`Fetching docket entries for docket ${docketId}`);
+  return getAllPages(
     "/api/rest/v4/docket-entries/",
     { docket: docketId, order_by: "entry_number" },
     { maxPages: 5 }
   );
+}
+
+// Accepts optional prefetched entries to avoid a duplicate API call.
+async function findPetitionDocuments(docketId, prefetchedEntries) {
+  const entries = Array.isArray(prefetchedEntries)
+    ? prefetchedEntries
+    : await fetchDocketEntries(docketId);
 
   const candidates = [];
   for (const entry of entries) {
@@ -85,4 +98,4 @@ async function findPetitionDocuments(docketId) {
   return candidates;
 }
 
-module.exports = { findPetitionDocuments };
+module.exports = { findPetitionDocuments, fetchDocketEntries };
