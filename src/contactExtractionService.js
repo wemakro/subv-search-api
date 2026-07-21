@@ -1,9 +1,27 @@
-// Builds outreach contacts in priority order
-// Principal first, attorney second, trustee informational only
+// src/contactExtractionService.js
+//
+// Builds outreach contacts in priority order.
+// Principal first, attorney second, trustee informational only.
+//
+// FIX: UST attorneys (U.S. Trustee Program lawyers) are EXCLUDED from outreach.
+// They appear in /attorneys because they filed documents, but they represent
+// the government — not the debtor — and must never be contacted as sales targets.
+
+const UST_RE = /\bu\.?s\.?\s*trustee\b|united states trustee|trustee[-\s]region|trustee program/i;
+
+function isUstAttorney(attorney) {
+  // Check contact address block
+  if (UST_RE.test(attorney.contactRaw || "")) return true;
+  // Check representing list
+  if ((attorney.representing || []).some(r => UST_RE.test(r || ""))) return true;
+  // Check firm name
+  if (UST_RE.test(attorney.firm || "")) return true;
+  return false;
+}
 
 function buildOutreachContacts(hydratedCase) {
   const contacts = [];
-  const { principals, attorneys, trustee, caseName, docketNumber, courtId } = hydratedCase;
+  const { principals, attorneys, trustee, caseName } = hydratedCase;
 
   // Priority 1 & 2: Principals with contact info, then without
   for (const p of (principals || [])) {
@@ -60,9 +78,14 @@ function buildOutreachContacts(hydratedCase) {
     });
   }
 
-  // Priority 4: Debtor attorneys
+  // Priority 4: Debtor attorneys — EXCLUDING UST attorneys
   for (const a of (attorneys || [])) {
     if (!a.name) continue;
+
+    // Skip U.S. Trustee Program attorneys — they are government lawyers,
+    // not outreach targets
+    if (isUstAttorney(a)) continue;
+
     contacts.push({
       contactType:   "debtor_attorney",
       priority:      4,
@@ -86,7 +109,7 @@ function buildOutreachContacts(hydratedCase) {
     });
   }
 
-  // Priority 5: Trustee — informational only
+  // Priority 5: Trustee — informational only, never an outreach target
   if (trustee?.name) {
     contacts.push({
       contactType:   "trustee",
