@@ -7,6 +7,7 @@ const { getRecapDocumentText }            = require("./recapDocumentService");
 const { extractPetitionFields }           = require("./petitionTextExtractor");
 const { extractPrincipals }              = require("./principalExtractor");
 const { buildOutreachContacts }          = require("./contactExtractionService");
+const { filterPrincipals }              = require("./nameSanityFilter");
 const logger = require("./logger");
 
 const CL = "https://www.courtlistener.com";
@@ -80,9 +81,20 @@ function extractTrustee(parties, bkData, docketParse, debug) {
     };
   }
 
-  const tp = (parties || []).find(p =>
-    (p.party_types||[]).some(t => (t.name||"").toLowerCase().includes("trustee"))
-  );
+  // Exclude the US Trustee office — it appears as a party with type "U.S. Trustee"
+  // or with a name matching UST patterns. Only "Trustee" (not "U.S. Trustee") party
+  // type indicates the appointed Sub-V case trustee.
+  const UST_RE = /\bu\.?s\.?\s*trustee\b|united states trustee|trustee[-\s]region|trustee program/i;
+  const tp = (parties || []).find(p => {
+    const partyTypeStr = (p.party_types||[]).map(t => t.name||"").join(" ");
+    // Must have "Trustee" somewhere in party type
+    if (!partyTypeStr.toLowerCase().includes("trustee")) return false;
+    // Exclude if party type is explicitly "U.S. Trustee" (not just "Trustee")
+    if (/u\.?s\.?\s*trustee/i.test(partyTypeStr)) return false;
+    // Exclude if name matches UST patterns
+    if (UST_RE.test(p.name || "")) return false;
+    return true;
+  });
   if (!tp) return { name: null, email: null, phone: null, address: null, raw: null, source: null, confidence: null };
   return {
     name: tp.name, email: null, phone: null,
@@ -252,8 +264,12 @@ async function hydrateDocket(docketId) {
   const normParties       = normalizeParties(parties);
   const attorneysFromApi  = normalizeAttorneys(attorneys, parties);
   const normAttorneys     = mergeParsedAttorneys(attorneysFromApi, docketParse, debug);
-  const principals        = extractPrincipals({ parties: normParties, petitionFields });
+  const rawPrincipals     = extractPrincipals({ parties: normParties, petitionFields });
+  const { kept: principals, removed: rejectedPrincipals } = filterPrincipals(rawPrincipals);
 
+  if (rejectedPrincipals.length) {
+    debug.warnings.push(`Removed ${rejectedPrincipals.length} junk principal(s): ${rejectedPrincipals.map(r => JSON.stringify(r.name).slice(0,40)).join(", ")}`);
+  }
   if (!principals.length) {
     debug.warnings.push("Principal not found in petition text.");
     debug.nextBestActions.push("Manual review of petition PDF recommended to identify signer.");
