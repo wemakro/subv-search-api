@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "test:cl": "node scripts/testCourtListener.js",
     "test:petition": "node scripts/testPetitionExtraction.js",
-    "test:parser": "node scripts/testDescriptionParser.js"
+    "test:parser": "node scripts/testDescriptionParser.js",
    "test:cleanup": "node scripts/testCleanupFixes.js"
   },
   "dependencies": {
