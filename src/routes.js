@@ -104,9 +104,17 @@ router.get("/debug/attorneys/:docketId", async (req, res) => {
 
     // Trustee names from the parties list, with the U.S. Trustee office
     // explicitly excluded — the UST is not the Subchapter V case trustee.
+    //
+    // The exclusion MUST test party_types, not the party's own name. The UST
+    // party is stored under the individual's name ("Matthew W. Cheney") with
+    // party_type "U.S. Trustee", so matching on the name never fires and the
+    // UST gets misfiled as the case trustee.
+    const isUstType = p => (p.party_types || [])
+      .some(t => /u\.?\s?s\.?\s+trustee|united\s+states\s+trustee/i.test((t && t.name) || ""));
+
     const trusteeNames = parties
       .filter(p => (p.party_types || []).some(t => /trustee/i.test((t && t.name) || "")))
-      .filter(p => !/u\.?\s?s\.?\s+trustee|united\s+states\s+trustee/i.test(p.name || ""))
+      .filter(p => !isUstType(p))
       .map(p => p.name)
       .filter(Boolean);
 
@@ -119,7 +127,10 @@ router.get("/debug/attorneys/:docketId", async (req, res) => {
       partyTypesSeen: parties.map(p => ({
         name:        p.name || "",
         types:       (p.party_types || []).map(t => (t && t.name) || ""),
-        attorneyIds: (p.attorneys || []).map(a => (a && a.id) || a)
+        attorneyLinks: (p.attorneys || []).map(a => ({
+          attorneyId: (a && a.attorney_id) || null,
+          roleCode:   (a && a.role !== undefined) ? a.role : null
+        }))
       })),
       summary:   result.summary,
       warnings:  result.warnings,
@@ -128,6 +139,34 @@ router.get("/debug/attorneys/:docketId", async (req, res) => {
   } catch(e) {
     logger.error("/debug/attorneys " + docketId + " failed: " + (e.message || e));
     res.status(500).json({ docketId, error: e.message || String(e) });
+  }
+});
+
+// ── Attorney field probe ───────────────────────────────────────────────────
+// Fetches ONE attorney record with NO `fields=` filter, so the response shows
+// every field CourtListener actually exposes on the v4 attorney resource.
+//
+// This exists because /debug/attorneys/ passes fields=id,name,contact_raw,
+// email,phone — which means its `rawFieldKeys` output can only ever echo that
+// list back. It cannot tell us whether `firm_name` exists. This route can.
+//
+// Safe to call on a single attorney: one request, no pagination.
+//   /debug/attorney-fields/14438631?secret=YOUR_CRON_SECRET
+router.get("/debug/attorney-fields/:attorneyId", async (req, res) => {
+  if (req.query.secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error:"Unauthorized" });
+  }
+  try {
+    const { clGetJson } = require("./courtListenerClient");
+    const a = await clGetJson(`/api/rest/v4/attorneys/${req.params.attorneyId}/`);
+    res.json({
+      attorneyId:      req.params.attorneyId,
+      availableFields: Object.keys(a || {}).filter(k => k !== "_clStatus"),
+      hasFirmName:     Object.prototype.hasOwnProperty.call(a || {}, "firm_name"),
+      record:          a
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message || String(e) });
   }
 });
 
