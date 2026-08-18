@@ -188,6 +188,11 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
     const isFaxLine = FAX_LINE_RE.test(rawLine);
     const line = stripLabel(rawLine);
 
+    // A bare "Email:" with nothing after it is common in CM/ECF filings.
+    // Stripping the label leaves an empty string — drop it rather than let it
+    // pollute the firm-name candidates.
+    if (!line) continue;
+
     const emailMatch = line.match(EMAIL_RE);
     if (emailMatch && !out.email) {
       out.email = emailMatch[0].toLowerCase();
