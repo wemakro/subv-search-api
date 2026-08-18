@@ -54,6 +54,10 @@ const AMPERSAND_RE   = /\s&\s|\s&$/;
 const UST_TEXT_RE   = /(?:united\s+states\s+trustee|u\.?\s?s\.?\s+trustee|office\s+of\s+the\s+u\.?\s?s\.?\s+trustee|us\s+dept\.?\s+of\s+justice|department\s+of\s+justice|executive\s+office\s+for\s+u)/i;
 const UST_DOMAIN_RE = /@(?:[\w-]+\.)*(?:usdoj\.gov|justice\.gov|uscourts\.gov)$/i;
 
+// Pro se markers. CM/ECF puts the DEBTOR itself in the attorney table with
+// contact_raw "PRO SE" when there is no counsel. These are never outreach targets.
+const PRO_SE_RE = /\bpro\s*[-\s]?se\b/i;
+
 // Generic mailbox prefixes — real, but not a person. Flag, don't discard.
 const GENERIC_MAILBOX_RE = /^(?:info|contact|admin|office|mail|inbox|reception|hello|support|filings?|ecf|notice|bankruptcy|clerk)@/i;
 
@@ -61,11 +65,23 @@ const GENERIC_MAILBOX_RE = /^(?:info|contact|admin|office|mail|inbox|reception|h
 
 function splitLines(raw) {
   if (!raw || typeof raw !== "string") return [];
-  return raw
+  const lines = raw
     .replace(/\r/g, "\n")
     .split("\n")
     .map(l => l.replace(/\s+/g, " ").trim())
     .filter(l => l.length > 0);
+
+  // CM/ECF frequently repeats the firm line verbatim. Dedup case-insensitively
+  // so the same firm name isn't scored twice.
+  const seen = new Set();
+  const out = [];
+  for (const l of lines) {
+    const key = l.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(l);
+  }
+  return out;
 }
 
 function stripLabel(line) {
@@ -170,6 +186,7 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
     state:           null,
     zip:             null,
     isUstOffice:     false,
+    isProSe:         false,
     parseConfidence: "NONE",
     unparsedLines:   [],
     warnings:        []
@@ -239,6 +256,14 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
     out.warnings.push("Matches United States Trustee / DOJ. Exclude from all outreach.");
   }
 
+  // ── Pass 2b: pro se detection ────────────────────────────────────────────
+  // "PRO SE" in the contact block means the party is representing itself. The
+  // record is the debtor, not a lawyer, and must never become an outreach target.
+  if (PRO_SE_RE.test(contactRaw || "")) {
+    out.isProSe = true;
+    out.warnings.push("Contact block is marked PRO SE — this is the self-represented party, not counsel.");
+  }
+
   // ── Pass 3: separate address lines from candidate firm lines ─────────────
   const addressLines = [];
   const nonAddress   = [];
@@ -266,7 +291,11 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
   // practices like "Law Office of Jane Smith" are kept as firms.
   let best = null;
 
-  for (const line of nonAddress) {
+  const firmCandidates = out.isProSe
+    ? []                                  // "PRO SE" is not a firm name
+    : nonAddress.filter(l => !PRO_SE_RE.test(l));
+
+  for (const line of firmCandidates) {
     if (line.length < 3 || line.length > 120) continue;
     const { score, reasons } = firmScore(line);
     if (score > 0 && (!best || score > best.score)) {
@@ -282,7 +311,7 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
   } else {
     // No firm keyword anywhere. Take the first non-address line that isn't the
     // attorney's own name — but mark it LOW so it can be filtered before use.
-    const candidate = nonAddress.find(
+    const candidate = firmCandidates.find(
       l => l.length >= 3 && l.length <= 120 && !isLikelyPersonNameOf(l, attorneyName)
     );
     if (candidate) {
@@ -298,7 +327,7 @@ function parseContactBlock(contactRaw, attorneyName, fallback) {
   out.firmKey = firmKeyFrom(out.firmName, out.domain);
 
   // ── Leftovers, for tuning the parser on real data ────────────────────────
-  out.unparsedLines = nonAddress.filter(l => l !== out.firmName);
+  out.unparsedLines = firmCandidates.filter(l => l !== out.firmName);
 
   // ── Overall parse confidence ─────────────────────────────────────────────
   if (out.email && out.firmConfidence === "HIGH")        out.parseConfidence = "HIGH";
