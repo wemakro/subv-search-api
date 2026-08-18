@@ -33,8 +33,12 @@ const TRUSTEE_PARTY_RE = /\btrustee\b/i;
 const CREDITOR_PARTY_RE= /\bcreditor\b|\bcommittee\b|\blessor\b|\blandlord\b|\bplaintiff\b|\bdefendant\b|\binterested\s+party\b|\brespondent\b|\bmovant\b|\bpetitioner\b/i;
 
 // Outreach priority: lower number = contact sooner
+const PRO_SE_RE = /\bpro\s*[-\s]?se\b/i;
+
 const ROLE_META = {
   debtor_counsel:    { priority: 1, outreachEligible: true,  label: "Debtor's counsel (attorney of record)" },
+  pro_se:            { priority: 7, outreachEligible: false, label: "Self-represented debtor — no counsel of record" },
+  invalid_record:    { priority: 8, outreachEligible: false, label: "Placeholder / blank attorney record — not a person" },
   unknown_counsel:   { priority: 4, outreachEligible: false, label: "Role unresolved — needs manual review" },
   trustee_counsel:   { priority: 5, outreachEligible: false, label: "Subchapter V trustee or trustee's counsel" },
   creditor_counsel:  { priority: 6, outreachEligible: false, label: "Creditor / other party counsel" },
@@ -172,6 +176,35 @@ function classifyAttorneys(input) {
 
     let role = null;
 
+    // 0a. Blank placeholder records. CM/ECF emits attorney rows with an empty
+    //     name; they carry a valid party link and would otherwise sail through
+    //     as debtor's counsel with HIGH confidence.
+    const cleanName = String(a.name || "").trim();
+    if (cleanName.length < 3) {
+      role = "invalid_record";
+      reasons.push("Attorney record has no usable name — placeholder row, not a real person");
+    }
+
+    // 0b. Pro se. The debtor itself is listed in the attorney table with
+    //     contact_raw "PRO SE". Also catch the case where the attorney name is
+    //     just the name of the party being "represented".
+    if (!role) {
+      const proSeByContact = !!(parsed && parsed.isProSe);
+      const proSeByName    = PRO_SE_RE.test(cleanName);
+      const nameIsParty    = reps.some(r => {
+        const pn = String(r.partyName || "").trim().toLowerCase();
+        return pn.length > 2 && pn === cleanName.toLowerCase();
+      });
+      if (proSeByContact || proSeByName || nameIsParty) {
+        role = "pro_se";
+        reasons.push(
+          nameIsParty && !proSeByContact && !proSeByName
+            ? 'Attorney name is identical to the party name ("' + cleanName + '") — this is the party, not counsel'
+            : "Contact block or name marked PRO SE — self-represented, no counsel of record"
+        );
+      }
+    }
+
     // 1. Hard exclusion: Office of the U.S. Trustee.
     //    Checked first because the party type "U.S. Trustee" also contains "trustee".
     const ustByParty   = reps.some(r => UST_PARTY_RE.test(r.partyTypes) || UST_PARTY_RE.test(r.partyName));
@@ -241,10 +274,15 @@ function classifyAttorneys(input) {
 
   const debtorCounsel = classified.filter(a => a.role === "debtor_counsel");
 
+  const anyProSe = classified.some(a => a.role === "pro_se");
+
   if (!debtorCounsel.length && classified.length) {
     warnings.push(
-      "No debtor's counsel identified on this docket despite " + classified.length +
-      " attorney record(s). Flag for manual review rather than defaulting to the first attorney."
+      anyProSe
+        ? "No debtor's counsel — the debtor appears to be filing pro se. This is a valid outcome, not a data " +
+          "gap. There is no attorney to contact on this case."
+        : "No debtor's counsel identified on this docket despite " + classified.length +
+          " attorney record(s). Flag for manual review rather than defaulting to the first attorney."
     );
   }
 
@@ -254,6 +292,8 @@ function classifyAttorneys(input) {
     trusteeCounsel:   classified.filter(a => a.role === "trustee_counsel").length,
     creditorCounsel:  classified.filter(a => a.role === "creditor_counsel").length,
     ustOffice:        classified.filter(a => a.role === "ust_office").length,
+    proSe:            classified.filter(a => a.role === "pro_se").length,
+    invalidRecord:    classified.filter(a => a.role === "invalid_record").length,
     unknown:          classified.filter(a => a.role === "unknown_counsel").length
   };
 
