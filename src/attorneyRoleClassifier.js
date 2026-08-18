@@ -67,12 +67,56 @@ function partyTypeString(party) {
   return types.map(t => (t && t.name) || "").join(" | ");
 }
 
-function attorneyIdsOnParty(party) {
+/**
+ * Extract { attorneyId, roleCode } from a party's nested `attorneys` array.
+ *
+ * CourtListener v4 does NOT nest attorney objects here. It nests the
+ * party-attorney RELATIONSHIP, shaped like:
+ *
+ *   {
+ *     "attorney":    "https://www.courtlistener.com/api/rest/v4/attorneys/14438631/",
+ *     "attorney_id": 14438631,
+ *     "date_action": null,
+ *     "docket":      "https://www.courtlistener.com/api/rest/v4/dockets/73744137/",
+ *     "docket_id":   73744137,
+ *     "role":        10
+ *   }
+ *
+ * Reading `.id` therefore returns undefined and every join silently fails.
+ * We read `attorney_id`, falling back to the URL and then to `.id` so the
+ * function still works if the shape changes or if plain integers are returned.
+ *
+ * `role` is an integer enum on the relationship. Its meaning is NOT documented
+ * here and must be confirmed against CourtListener before being relied on —
+ * we surface it for inspection but never branch on it.
+ */
+function attorneyLinksOnParty(party) {
   const list = (party && Array.isArray(party.attorneys)) ? party.attorneys : [];
-  return list
-    .map(a => (a && typeof a === "object") ? a.id : a)
-    .filter(v => v !== undefined && v !== null)
-    .map(String);
+  const out = [];
+
+  for (const a of list) {
+    if (a === null || a === undefined) continue;
+
+    let id = null;
+    let roleCode = null;
+
+    if (typeof a === "number" || typeof a === "string") {
+      id = String(a);
+    } else if (typeof a === "object") {
+      roleCode = (a.role !== undefined) ? a.role : null;
+      if (a.attorney_id !== undefined && a.attorney_id !== null) {
+        id = String(a.attorney_id);
+      } else if (typeof a.attorney === "string") {
+        const m = a.attorney.match(/\/attorneys\/(\d+)\/?/);
+        if (m) id = m[1];
+      } else if (a.id !== undefined && a.id !== null) {
+        id = String(a.id);
+      }
+    }
+
+    if (id) out.push({ attorneyId: id, roleCode });
+  }
+  return out;
 }
 
 // ── MAIN ────────────────────────────────────────────────────────────────────
@@ -97,18 +141,26 @@ function classifyAttorneys(input) {
 
   // Build attorneyId -> [{ partyName, partyTypes }]
   const repMap = Object.create(null);
+  let totalLinks = 0;
   for (const p of parties) {
     const types = partyTypeString(p);
-    for (const aid of attorneyIdsOnParty(p)) {
+    for (const link of attorneyLinksOnParty(p)) {
+      totalLinks++;
+      const aid = link.attorneyId;
       if (!repMap[aid]) repMap[aid] = [];
-      repMap[aid].push({ partyName: p.name || "", partyTypes: types });
+      repMap[aid].push({
+        partyName:  p.name || "",
+        partyTypes: types,
+        roleCode:   link.roleCode
+      });
     }
   }
 
-  if (parties.length && !Object.keys(repMap).length) {
+  if (parties.length && !totalLinks) {
     warnings.push(
-      "Parties were returned but none carried a nested `attorneys` array. Role attribution is impossible " +
-      "for this docket — confirm that /parties/ was called with filter_nested_results=True."
+      "Parties were returned but none carried an attorney link. Role attribution is impossible for this " +
+      "docket. This is normal when counsel has not yet appeared; if it happens on every docket, check that " +
+      "/parties/ is called with filter_nested_results=True."
     );
   }
 
@@ -213,5 +265,5 @@ function classifyAttorneys(input) {
 module.exports = {
   classifyAttorneys,
   ROLE_META,
-  _internals: { sameHuman, nameTokens, partyTypeString, attorneyIdsOnParty }
+  _internals: { sameHuman, nameTokens, partyTypeString, attorneyLinksOnParty }
 };
