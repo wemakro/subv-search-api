@@ -1,0 +1,217 @@
+"use strict";
+
+/**
+ * attorneyRoleClassifier.js
+ *
+ * Decides, for every attorney attached to a docket, WHO THEY REPRESENT.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `/api/rest/v4/attorneys/?docket={id}` returns every attorney on the case:
+ * debtor's counsel, creditors' counsel, counsel for the Subchapter V trustee,
+ * and the Office of the United States Trustee. Nothing in that response says
+ * which is which. Current code treats them as one undifferentiated list, so
+ * the Sub-V trustee and the attorney of record end up interchangeable.
+ *
+ * The role information lives on the OTHER endpoint: each object returned by
+ * `/api/rest/v4/parties/?docket={id}` carries a `party_types` array and a
+ * nested `attorneys` array. Joining attorney -> party -> party_type is the
+ * only reliable way to identify debtor's counsel.
+ *
+ * This module is PURE — no network, no database, no side effects.
+ *
+ * Usage:
+ *   const { classifyAttorneys } = require("./attorneyRoleClassifier");
+ *   const result = classifyAttorneys({ attorneys, parties, trusteeNames: ["Sylvia Mayer"] });
+ */
+
+// ── ROLE PATTERNS (checked in this order — order matters) ───────────────────
+
+const UST_PARTY_RE     = /(?:united\s+states\s+trustee|u\.?\s?s\.?\s+trustee|assistant\s+u\.?\s?s\.?\s+trustee|\bust\b)/i;
+const DEBTOR_PARTY_RE  = /\bdebtor\b|debtor[-\s]in[-\s]possession|\bd\.?i\.?p\.?\b|\bjoint\s+debtor\b/i;
+const TRUSTEE_PARTY_RE = /\btrustee\b/i;
+const CREDITOR_PARTY_RE= /\bcreditor\b|\bcommittee\b|\blessor\b|\blandlord\b|\bplaintiff\b|\bdefendant\b|\binterested\s+party\b|\brespondent\b|\bmovant\b|\bpetitioner\b/i;
+
+// Outreach priority: lower number = contact sooner
+const ROLE_META = {
+  debtor_counsel:    { priority: 1, outreachEligible: true,  label: "Debtor's counsel (attorney of record)" },
+  unknown_counsel:   { priority: 4, outreachEligible: false, label: "Role unresolved — needs manual review" },
+  trustee_counsel:   { priority: 5, outreachEligible: false, label: "Subchapter V trustee or trustee's counsel" },
+  creditor_counsel:  { priority: 6, outreachEligible: false, label: "Creditor / other party counsel" },
+  ust_office:        { priority: 9, outreachEligible: false, label: "Office of the U.S. Trustee — never contact" }
+};
+
+// ── HELPERS ─────────────────────────────────────────────────────────────────
+
+function nameTokens(s) {
+  if (!s) return [];
+  return String(s)
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\b(?:jr|sr|ii|iii|iv|esq|esquire|md|phd|cpa)\b/g, " ")
+    .replace(/[^a-z\s'-]/g, " ")
+    .split(/\s+/)
+    .filter(t => t.length > 1);
+}
+
+/** Conservative person-name match: requires first AND last token to agree. */
+function sameHuman(a, b) {
+  const ta = nameTokens(a);
+  const tb = nameTokens(b);
+  if (ta.length < 2 || tb.length < 2) return false;
+  return ta[0] === tb[0] && ta[ta.length - 1] === tb[tb.length - 1];
+}
+
+function partyTypeString(party) {
+  const types = party && Array.isArray(party.party_types) ? party.party_types : [];
+  return types.map(t => (t && t.name) || "").join(" | ");
+}
+
+function attorneyIdsOnParty(party) {
+  const list = (party && Array.isArray(party.attorneys)) ? party.attorneys : [];
+  return list
+    .map(a => (a && typeof a === "object") ? a.id : a)
+    .filter(v => v !== undefined && v !== null)
+    .map(String);
+}
+
+// ── MAIN ────────────────────────────────────────────────────────────────────
+
+/**
+ * @param {object} input
+ * @param {Array}  input.attorneys     Raw or pre-parsed attorney objects. Each needs { id, name }.
+ *                                     If a `parsed` key is present (from attorneyContactParser)
+ *                                     its `isUstOffice` flag is honoured.
+ * @param {Array}  input.parties       Raw objects from /parties/?docket=X&filter_nested_results=True
+ * @param {Array}  input.trusteeNames  Optional. Known Sub-V trustee name(s) for this case, from
+ *                                     bankruptcy-information, the parties list, or the docket text parser.
+ * @returns {object} { attorneys: [...], debtorCounsel: [...], summary: {...}, warnings: [...] }
+ */
+function classifyAttorneys(input) {
+  input = input || {};
+  const attorneys    = Array.isArray(input.attorneys) ? input.attorneys : [];
+  const parties      = Array.isArray(input.parties) ? input.parties : [];
+  const trusteeNames = (Array.isArray(input.trusteeNames) ? input.trusteeNames : []).filter(Boolean);
+
+  const warnings = [];
+
+  // Build attorneyId -> [{ partyName, partyTypes }]
+  const repMap = Object.create(null);
+  for (const p of parties) {
+    const types = partyTypeString(p);
+    for (const aid of attorneyIdsOnParty(p)) {
+      if (!repMap[aid]) repMap[aid] = [];
+      repMap[aid].push({ partyName: p.name || "", partyTypes: types });
+    }
+  }
+
+  if (parties.length && !Object.keys(repMap).length) {
+    warnings.push(
+      "Parties were returned but none carried a nested `attorneys` array. Role attribution is impossible " +
+      "for this docket — confirm that /parties/ was called with filter_nested_results=True."
+    );
+  }
+
+  const classified = attorneys.map(a => {
+    const aid    = a.id !== undefined && a.id !== null ? String(a.id) : null;
+    const reps   = (aid && repMap[aid]) ? repMap[aid] : [];
+    const parsed = a.parsed || null;
+    const reasons = [];
+
+    let role = null;
+
+    // 1. Hard exclusion: Office of the U.S. Trustee.
+    //    Checked first because the party type "U.S. Trustee" also contains "trustee".
+    const ustByParty   = reps.some(r => UST_PARTY_RE.test(r.partyTypes) || UST_PARTY_RE.test(r.partyName));
+    const ustByContact = !!(parsed && parsed.isUstOffice);
+    if (ustByParty || ustByContact) {
+      role = "ust_office";
+      reasons.push(ustByParty ? "Represents a U.S. Trustee party" : "Contact block / email domain matches the UST or DOJ");
+    }
+
+    // 2. Named Sub-V trustee appearing in the attorney table.
+    //    Sub-V trustees are usually practising bankruptcy attorneys, so they show up
+    //    here as well as in the parties list. THIS IS THE MISATTRIBUTION BUG.
+    if (!role) {
+      const trusteeHit = trusteeNames.find(tn => sameHuman(tn, a.name));
+      if (trusteeHit) {
+        role = "trustee_counsel";
+        reasons.push('Attorney name matches the case trustee ("' + trusteeHit + '") — not debtor\'s counsel');
+      }
+    }
+
+    // 3. Debtor's counsel — the segment we actually want.
+    if (!role) {
+      const debtorRep = reps.find(r =>
+        DEBTOR_PARTY_RE.test(r.partyTypes) && !TRUSTEE_PARTY_RE.test(r.partyTypes)
+      );
+      if (debtorRep) {
+        role = "debtor_counsel";
+        reasons.push('Represents party "' + debtorRep.partyName + '" typed as "' + debtorRep.partyTypes + '"');
+      }
+    }
+
+    // 4. Trustee's counsel.
+    if (!role && reps.some(r => TRUSTEE_PARTY_RE.test(r.partyTypes))) {
+      role = "trustee_counsel";
+      reasons.push("Represents a trustee party");
+    }
+
+    // 5. Creditors and everyone else with a resolved party link.
+    if (!role && reps.some(r => CREDITOR_PARTY_RE.test(r.partyTypes))) {
+      role = "creditor_counsel";
+      reasons.push("Represents a creditor or other non-debtor party");
+    }
+
+    // 6. No party link at all. DO NOT assume debtor's counsel.
+    if (!role) {
+      role = "unknown_counsel";
+      reasons.push(
+        reps.length
+          ? "Linked to parties but no party type matched a known role: " + reps.map(r => r.partyTypes).join(" ; ")
+          : "No party link returned for this attorney — cannot determine who they represent"
+      );
+    }
+
+    const meta = ROLE_META[role];
+
+    return Object.assign({}, a, {
+      role:              role,
+      roleLabel:         meta.label,
+      roleReasons:       reasons,
+      roleConfidence:    role === "unknown_counsel" ? "LOW"
+                       : (reps.length ? "HIGH" : "MEDIUM"),
+      outreachEligible:  meta.outreachEligible,
+      outreachPriority:  meta.priority,
+      representedParties: reps
+    });
+  });
+
+  const debtorCounsel = classified.filter(a => a.role === "debtor_counsel");
+
+  if (!debtorCounsel.length && classified.length) {
+    warnings.push(
+      "No debtor's counsel identified on this docket despite " + classified.length +
+      " attorney record(s). Flag for manual review rather than defaulting to the first attorney."
+    );
+  }
+
+  const summary = {
+    total:            classified.length,
+    debtorCounsel:    debtorCounsel.length,
+    trusteeCounsel:   classified.filter(a => a.role === "trustee_counsel").length,
+    creditorCounsel:  classified.filter(a => a.role === "creditor_counsel").length,
+    ustOffice:        classified.filter(a => a.role === "ust_office").length,
+    unknown:          classified.filter(a => a.role === "unknown_counsel").length
+  };
+
+  classified.sort((x, y) => x.outreachPriority - y.outreachPriority);
+
+  return { attorneys: classified, debtorCounsel: debtorCounsel, summary: summary, warnings: warnings };
+}
+
+module.exports = {
+  classifyAttorneys,
+  ROLE_META,
+  _internals: { sameHuman, nameTokens, partyTypeString, attorneyIdsOnParty }
+};
