@@ -170,6 +170,168 @@ router.get("/debug/attorney-fields/:attorneyId", async (req, res) => {
   }
 });
 
+// ── Attorney data coverage sampler ─────────────────────────────────────────
+// Read-only. Walks a batch of Sub-V cases already in Postgres, runs each
+// through the parser + classifier, and reports what percentage of debtor's
+// counsel actually have a firm name, email, and phone in CourtListener.
+//
+// This answers the sizing question directly: how many attorney leads are
+// contactable from court data alone, and how many need a firm-website lookup.
+//
+// COST: roughly 2 CourtListener requests per docket. Default 10, hard cap 25,
+// so a full run spends at most ~50 of the 300/day Tier 1 budget.
+//
+//   /admin/attorney-coverage?secret=YOUR_CRON_SECRET&limit=10&offset=0
+router.get("/admin/attorney-coverage", async (req, res) => {
+  if (req.query.secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error:"Unauthorized" });
+  }
+
+  // Forced to integers — these are interpolated into SQL, so they must never
+  // be able to carry anything but a number.
+  const limit  = Math.min(Math.max(parseInt(req.query.limit  || "10", 10) || 10, 1), 25);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10) || 0, 0);
+
+  try {
+    const caseRows = await query(
+      `SELECT id, courtlistener_docket_id, case_name, court_id, petition_date
+         FROM cases
+        WHERE courtlistener_docket_id IS NOT NULL
+          AND is_subchapter_v = true
+        ORDER BY petition_date DESC NULLS LAST
+        LIMIT ${limit} OFFSET ${offset}`
+    );
+
+    const stats = {
+      docketsSampled:       0,
+      docketsFailed:        0,
+      attorneyRecordsTotal: 0,
+      roleCounts:           { debtor_counsel:0, ust_office:0, trustee_counsel:0, creditor_counsel:0, pro_se:0, invalid_record:0, unknown_counsel:0 },
+      docketsWithNoCounsel: 0,
+      docketsProSe:         0,
+      debtorCounsel: {
+        total:            0,
+        withFirmName:     0,
+        withFirmHighConf: 0,
+        withEmail:        0,
+        withPhone:        0,
+        withAddress:      0
+      }
+    };
+
+    const debtorCounselRows = [];
+    const firmKeys = {};
+    const failures = [];
+
+    for (const c of caseRows.rows) {
+      const docketId = c.courtlistener_docket_id;
+      try {
+        const parties = await getAllPages("/api/rest/v4/parties/", {
+          docket: docketId,
+          filter_nested_results: "True"
+        }, { maxPages: 2 });
+
+        const attorneys = await getAllPages("/api/rest/v4/attorneys/", {
+          docket: docketId,
+          filter_nested_results: "True",
+          fields: "id,name,contact_raw,email,phone,fax",
+          page_size: 20
+        }, { maxPages: 2 });
+
+        const withParsed = attorneys.map(a => ({
+          id:     a.id,
+          name:   a.name || "",
+          parsed: parseContactBlock(a.contact_raw, a.name, { email: a.email, phone: a.phone })
+        }));
+
+        const isUstType = p => (p.party_types || [])
+          .some(t => /u\.?\s?s\.?\s+trustee|united\s+states\s+trustee/i.test((t && t.name) || ""));
+
+        const trusteeNames = parties
+          .filter(p => (p.party_types || []).some(t => /trustee/i.test((t && t.name) || "")))
+          .filter(p => !isUstType(p))
+          .map(p => p.name)
+          .filter(Boolean);
+
+        const result = classifyAttorneys({ attorneys: withParsed, parties, trusteeNames });
+
+        stats.docketsSampled++;
+        stats.attorneyRecordsTotal += result.attorneys.length;
+        result.attorneys.forEach(a => {
+          if (stats.roleCounts[a.role] !== undefined) stats.roleCounts[a.role]++;
+        });
+        if (!result.debtorCounsel.length) stats.docketsWithNoCounsel++;
+        if (result.attorneys.some(a => a.role === "pro_se")) stats.docketsProSe++;
+
+        for (const a of result.debtorCounsel) {
+          const p = a.parsed || {};
+          stats.debtorCounsel.total++;
+          if (p.firmName)                  stats.debtorCounsel.withFirmName++;
+          if (p.firmConfidence === "HIGH") stats.debtorCounsel.withFirmHighConf++;
+          if (p.email)                     stats.debtorCounsel.withEmail++;
+          if (p.phone)                     stats.debtorCounsel.withPhone++;
+          if (p.addressFull)               stats.debtorCounsel.withAddress++;
+
+          if (p.firmKey) firmKeys[p.firmKey] = (firmKeys[p.firmKey] || 0) + 1;
+
+          debtorCounselRows.push({
+            caseName:   c.case_name,
+            courtId:    c.court_id,
+            docketId:   docketId,
+            attorney:   a.name,
+            firm:       p.firmName || null,
+            firmConf:   p.firmConfidence,
+            email:      p.email || null,
+            phone:      p.phone || null,
+            city:       p.city || null,
+            state:      p.state || null,
+            needsLookup: !p.email || !p.firmName
+          });
+        }
+      } catch(e) {
+        stats.docketsFailed++;
+        failures.push({ docketId, error: (e && e.message) || String(e) });
+        logger.warn("coverage sample failed for docket " + docketId + ": " + ((e && e.message) || e));
+      }
+    }
+
+    const pct = (n, d) => d > 0 ? Math.round((n / d) * 1000) / 10 : null;
+    const dc = stats.debtorCounsel;
+
+    // Firms appearing on more than one case — these collapse into a single
+    // outreach target rather than one per case.
+    const repeatFirms = Object.keys(firmKeys)
+      .filter(k => firmKeys[k] > 1)
+      .map(k => ({ firmKey: k, caseCount: firmKeys[k] }))
+      .sort((a, b) => b.caseCount - a.caseCount);
+
+    res.json({
+      sample: { limit, offset, docketsRequested: caseRows.rows.length, docketsSampled: stats.docketsSampled, docketsFailed: stats.docketsFailed },
+      roleCounts: stats.roleCounts,
+      dockets: {
+        withNoDebtorCounsel: stats.docketsWithNoCounsel,
+        proSe:               stats.docketsProSe
+      },
+      debtorCounselCoverage: {
+        total:            dc.total,
+        withFirmNamePct:  pct(dc.withFirmName, dc.total),
+        withFirmHighPct:  pct(dc.withFirmHighConf, dc.total),
+        withEmailPct:     pct(dc.withEmail, dc.total),
+        withPhonePct:     pct(dc.withPhone, dc.total),
+        withAddressPct:   pct(dc.withAddress, dc.total),
+        needsLookupCount: debtorCounselRows.filter(r => r.needsLookup).length
+      },
+      uniqueFirmKeys: Object.keys(firmKeys).length,
+      repeatFirms,
+      debtorCounsel: debtorCounselRows,
+      failures
+    });
+  } catch(e) {
+    logger.error("attorney-coverage error: " + (e.message || e));
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
 // ── Schema inspection ──────────────────────────────────────────────────────
 // Read-only. Reads Postgres information_schema so the attorney/firm backfill
 // can be written against the real column names instead of guessed ones.
